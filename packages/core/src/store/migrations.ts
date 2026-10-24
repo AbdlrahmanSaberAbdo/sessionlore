@@ -117,6 +117,23 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX tasks_cluster ON tasks (cluster_id);
     `,
   },
+  {
+    version: 6,
+    name: "correction embeddings and correction clusters",
+    sql: `
+      CREATE TABLE correction_clusters (
+        id          INTEGER PRIMARY KEY,
+        -- Null until the cheap model has named it.
+        name        TEXT,
+        created_at  TEXT NOT NULL
+      );
+
+      ALTER TABLE user_messages ADD COLUMN embedding BLOB;
+      ALTER TABLE user_messages ADD COLUMN embedding_model TEXT;
+      ALTER TABLE user_messages ADD COLUMN correction_cluster_id INTEGER REFERENCES correction_clusters(id) ON DELETE SET NULL;
+      CREATE INDEX user_messages_correction_cluster ON user_messages (correction_cluster_id);
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {
