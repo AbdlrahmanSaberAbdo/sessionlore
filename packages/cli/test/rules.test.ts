@@ -140,4 +140,124 @@ describe("suggest Rules", () => {
       },
     ]);
   });
+
+  it("does not write another Rule for a Correction Cluster whose Rule was Rejected, even as it grows", async () => {
+    const shop = home.gitRepo("code/shop");
+    pnpmCorrectionsIn(shop);
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    expect((await runCli(home, ["reject", String(id)], opts)).exitCode).toBe(0);
+
+    session(shop, "2026-05-28T09:00:00.000Z", "bump the deps", "no, run pnpm install");
+    await analyze(opts);
+
+    expect((await suggest(opts)).created).toEqual([]);
+    expect(opts.requests().filter((r) => r.includes("<correction-cluster"))).toHaveLength(1);
+    expect(existsSync(join(shop, "CLAUDE.md"))).toBe(false);
+  });
+});
+
+describe("accept a Rule", () => {
+  it("creates the Project's CLAUDE.md with a section sessionlore manages, holding the Rule", async () => {
+    const shop = home.gitRepo("code/shop");
+    pnpmCorrectionsIn(shop);
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    expect(existsSync(join(shop, "CLAUDE.md"))).toBe(false);
+
+    const result = await runCli(home, ["accept", String(id), "--json"], opts);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    const file = join(shop, "CLAUDE.md");
+    expect(result.json()).toMatchObject({ suggestion: { id, state: "Accepted" }, files: [{ path: file }] });
+    expect(readFileSync(file, "utf8")).toBe(
+      [
+        "<!-- sessionlore:rules:start -->",
+        "## Rules from sessionlore",
+        "",
+        "- Use pnpm, never npm, to install packages and run scripts.",
+        "<!-- sessionlore:rules:end -->",
+        "",
+      ].join("\n"),
+    );
+    expect(existsSync(home.resolve(".claude/CLAUDE.md"))).toBe(false);
+  });
+
+  it("adds a User scope Rule to the user-level CLAUDE.md, leaving what the person wrote untouched", async () => {
+    session(home.gitRepo("code/shop"), "2026-05-10T09:00:00.000Z", "fix the build", "no, use pnpm not npm");
+    session(home.gitRepo("code/blog"), "2026-05-20T09:00:00.000Z", "add a post", "no, we use pnpm here", "no, pnpm please");
+    const mine = "# My preferences\r\n\r\nKeep answers short.  \n<!-- a comment -->";
+    const file = home.resolve(".claude/CLAUDE.md");
+    mkdirSync(home.resolve(".claude"), { recursive: true });
+    writeFileSync(file, mine);
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    expect((await review())[0].scope).toEqual({ kind: "user" });
+
+    const result = await runCli(home, ["accept", String(id)], opts);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toContain(file);
+    const content = readFileSync(file, "utf8");
+    expect(content.startsWith(mine)).toBe(true);
+    expect(content.slice(mine.length)).toBe(
+      [
+        "",
+        "",
+        "<!-- sessionlore:rules:start -->",
+        "## Rules from sessionlore",
+        "",
+        "- Use pnpm, never npm, to install packages and run scripts.",
+        "<!-- sessionlore:rules:end -->",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("adds a second Rule to the same managed section, keeping content before and after it", async () => {
+    const shop = home.gitRepo("code/shop");
+    pnpmCorrectionsIn(shop);
+    session(shop, "2026-05-26T09:00:00.000Z", "format the file", "no, indent with tabs");
+    session(shop, "2026-05-27T09:00:00.000Z", "add a helper", "no, tabs not spaces", "no, tabs please");
+    const file = join(shop, "CLAUDE.md");
+    writeFileSync(file, "# Shop\n\nRun tests with `pnpm test`.\n");
+    const opts = options(
+      modelProvider((request) =>
+        request.includes("tabs") ? { title: "Indent with tabs", rule: "Indent with tabs, not spaces." } : pnpmRule,
+      ),
+    );
+    await analyze(opts);
+    const created = (await suggest(opts)).created;
+    expect(created).toHaveLength(2);
+    const byTitle = new Map((await review()).map((s: any) => [s.title, s.id]));
+
+    expect((await runCli(home, ["accept", String(byTitle.get("Use pnpm"))], opts)).exitCode).toBe(0);
+    // The person writes more after sessionlore's section.
+    writeFileSync(file, readFileSync(file, "utf8") + "\n## Notes\n\nDeploys are on Fridays.\n");
+    const second = await runCli(home, ["accept", String(byTitle.get("Indent with tabs"))], opts);
+
+    expect(second.exitCode, second.stderr).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(
+      [
+        "# Shop",
+        "",
+        "Run tests with `pnpm test`.",
+        "",
+        "<!-- sessionlore:rules:start -->",
+        "## Rules from sessionlore",
+        "",
+        "- Use pnpm, never npm, to install packages and run scripts.",
+        "- Indent with tabs, not spaces.",
+        "<!-- sessionlore:rules:end -->",
+        "",
+        "## Notes",
+        "",
+        "Deploys are on Fridays.",
+        "",
+      ].join("\n"),
+    );
+  });
 });
