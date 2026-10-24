@@ -1,5 +1,7 @@
+import { dirname } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bubble, FixtureHome, writeCursorDatabase } from "@sessionlore/fixtures";
+import { bubble, cursorDatabasePath, FixtureHome, holdCursorDatabaseOpen, writeCursorDatabase } from "@sessionlore/fixtures";
+import { snapshotTree } from "./support/files.js";
 import { runCli } from "./support/harness.js";
 
 let home: FixtureHome;
@@ -125,5 +127,35 @@ describe("scan of Cursor Sessions", () => {
       "Prices are rounded in money.ts.",
     ]);
     expect(session.messages[2]).toMatchObject({ role: "assistant", subagent: "explore" });
+  });
+
+  it("leaves the Cursor database unchanged", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeCursorDatabase(home, [
+      { folder: repo, createdAt: "2026-05-01T09:00:00.000Z", bubbles: [bubble.user("hi"), bubble.assistant("hello")] },
+    ]);
+    const before = snapshotTree(dirname(cursorDatabasePath(home)));
+
+    expect((await runCli(home, ["scan"])).exitCode).toBe(0);
+
+    expect(snapshotTree(dirname(cursorDatabasePath(home)))).toEqual(before);
+  });
+
+  it("scans while Cursor holds the database open", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeCursorDatabase(home, [
+      { folder: repo, createdAt: "2026-05-01T09:00:00.000Z", bubbles: [bubble.user("hi"), bubble.assistant("hello")] },
+    ]);
+    const cursor = holdCursorDatabaseOpen(home);
+    try {
+      const scan = await runCli(home, ["scan"]);
+      expect(scan.stderr).toBe("");
+      expect(scan.exitCode).toBe(0);
+    } finally {
+      cursor.close();
+    }
+
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+    expect(sessions).toHaveLength(1);
   });
 });
