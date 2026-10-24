@@ -300,3 +300,195 @@ describe("reject", () => {
     expect(result.stderr).toContain("already Rejected");
   });
 });
+
+describe("edit", () => {
+  it("saves what the person changes in their editor, and accept writes the edited Suggestion", async () => {
+    const { shop } = workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const edited = await runCli(home, ["edit", String(id)], {
+      ...opts,
+      editor: (text) => {
+        const form = JSON.parse(text);
+        expect(form).toEqual({ title: migrationSkill.title, trigger: migrationSkill.trigger, steps: migrationSkill.steps });
+        return JSON.stringify({ ...form, title: "Add a migration", steps: ["Create db/migrations/<n>.sql.", "Run it."] });
+      },
+    });
+
+    expect(edited.exitCode, edited.stderr).toBe(0);
+    const [suggestion] = await review();
+    expect(suggestion).toMatchObject({ id, title: "Add a migration", steps: ["Create db/migrations/<n>.sql.", "Run it."] });
+    expect((await runCli(home, ["accept", String(id)], opts)).exitCode).toBe(0);
+    const skill = readFileSync(join(shop, ".claude", "skills", "add-a-migration", "SKILL.md"), "utf8");
+    expect(skill).toContain("# Add a migration");
+    expect(skill).toContain("1. Create db/migrations/<n>.sql.\n2. Run it.\n");
+    expect(skill).not.toContain("Add a rollback");
+  });
+
+  it.each(["accept", "reject"])("won't edit a Suggestion after %s", async (action) => {
+    workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    expect((await runCli(home, [action, String(id)], opts)).exitCode).toBe(0);
+
+    const result = await runCli(home, ["edit", String(id)], opts);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/already (Accepted|Rejected); only Pending Suggestions can be edited/);
+  });
+
+  it("keeps the Suggestion unchanged when the edit isn't valid", async () => {
+    workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const broken = await runCli(home, ["edit", String(id)], { ...opts, editor: (text) => text.replace("{", "") });
+    const emptied = await runCli(home, ["edit", String(id)], {
+      ...opts,
+      editor: (text) => JSON.stringify({ ...JSON.parse(text), steps: [] }),
+    });
+
+    expect(broken.exitCode).not.toBe(0);
+    expect(broken.stderr).toContain("not valid JSON");
+    expect(emptied.exitCode).not.toBe(0);
+    expect(emptied.stderr).toContain('"steps" must be a non-empty list');
+    expect((await review())[0]).toMatchObject({ title: migrationSkill.title, steps: migrationSkill.steps });
+  });
+});
+
+describe("scope", () => {
+  it("overriding Project scope with User scope makes accept install in the home directory", async () => {
+    const { shop } = workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const result = await runCli(home, ["scope", String(id), "user", "--json"], opts);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.json().suggestion.scope).toEqual({ kind: "user" });
+    expect((await review())[0].scope).toEqual({ kind: "user" });
+    expect((await runCli(home, ["accept", String(id)], opts)).exitCode).toBe(0);
+    expect(existsSync(home.resolve(".claude/skills/write-a-database-migration/SKILL.md"))).toBe(true);
+    expect(existsSync(join(shop, ".claude", "skills"))).toBe(false);
+  });
+
+  it("sets Project scope to the Project of a given folder", async () => {
+    const shop = home.gitRepo("code/shop");
+    const blog = home.gitRepo("code/blog");
+    session(shop, "2026-05-10T09:00:00.000Z", "write a database migration for orders");
+    session(blog, "2026-05-20T09:00:00.000Z", "add a database migration for posts", "database migration for tags");
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const result = await runCli(home, ["scope", String(id), "project", join(blog, "src")], opts);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect((await review())[0].scope).toEqual({ kind: "project", project: { name: "blog", path: blog } });
+    expect((await runCli(home, ["accept", String(id)], opts)).exitCode).toBe(0);
+    expect(existsSync(join(blog, ".claude", "skills", "write-a-database-migration", "SKILL.md"))).toBe(true);
+  });
+
+  it("needs a folder for Project scope when the Evidence spans several Projects", async () => {
+    session(home.gitRepo("code/shop"), "2026-05-10T09:00:00.000Z", "write a database migration for orders");
+    session(home.gitRepo("code/blog"), "2026-05-20T09:00:00.000Z", "add a database migration for posts", "database migration for tags");
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const result = await runCli(home, ["scope", String(id), "project"], opts);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("several Projects");
+  });
+
+  it("won't change the Scope of an Accepted Suggestion", async () => {
+    workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    await runCli(home, ["accept", String(id)], opts);
+
+    const result = await runCli(home, ["scope", String(id), "user"], opts);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("only Pending Suggestions");
+  });
+});
+
+describe("suggesting again", () => {
+  const updatedSkill = { ...migrationSkill, steps: [...migrationSkill.steps, "Seed test data."] };
+
+  it("replaces a Pending Suggestion with an updated one once its Workflow gains several new Tasks", async () => {
+    const { shop } = workflowInOneProject();
+    let skill: object = migrationSkill;
+    const opts = options(modelProvider(() => skill));
+    await analyze(opts);
+    const [first] = (await suggest(opts)).created;
+
+    session(shop, "2026-05-27T09:00:00.000Z", "database migration for invoices", "database migration for refunds");
+    session(shop, "2026-05-29T09:00:00.000Z", "database migration for coupons");
+    await analyze(opts);
+    skill = updatedSkill;
+    const again = await suggest(opts);
+
+    expect(again.created).toHaveLength(1);
+    expect(again.replaced).toEqual([first]);
+    const suggestions = await review();
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0]).toMatchObject({ id: again.created[0], steps: updatedSkill.steps });
+    expect(suggestions[0].evidence).toHaveLength(6);
+    expect((await runCli(home, ["accept", String(first)], opts)).stderr).toContain(`No Suggestion has id ${first}`);
+  });
+
+  it("keeps a Pending Suggestion the person edited, however much its Workflow grows", async () => {
+    const { shop } = workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [first] = (await suggest(opts)).created;
+    await runCli(home, ["edit", String(first)], { ...opts, editor: (text) => text.replace(migrationSkill.title, "My migration") });
+
+    session(shop, "2026-05-27T09:00:00.000Z", "database migration for invoices", "database migration for refunds");
+    session(shop, "2026-05-29T09:00:00.000Z", "database migration for coupons");
+    await analyze(opts);
+
+    expect(await suggest(opts)).toMatchObject({ created: [], replaced: [] });
+    expect((await review()).map((s: any) => [s.id, s.title])).toEqual([[first, "My migration"]]);
+  });
+
+  it("carries a Scope the person chose over to the Suggestion that replaces it", async () => {
+    const { shop } = workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [first] = (await suggest(opts)).created;
+    expect((await runCli(home, ["scope", String(first), "user"], opts)).exitCode).toBe(0);
+
+    session(shop, "2026-05-27T09:00:00.000Z", "database migration for invoices", "database migration for refunds");
+    session(shop, "2026-05-29T09:00:00.000Z", "database migration for coupons");
+    await analyze(opts);
+    const again = await suggest(opts);
+
+    expect(again.replaced).toEqual([first]);
+    expect((await review())[0].scope).toEqual({ kind: "user" });
+  });
+
+  it("keeps a Pending Suggestion when its Workflow gains only a Task or so", async () => {
+    const { shop } = workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [first] = (await suggest(opts)).created;
+
+    session(shop, "2026-05-27T09:00:00.000Z", "database migration for invoices");
+    await analyze(opts);
+    const again = await suggest(opts);
+
+    expect(again).toMatchObject({ created: [], replaced: [] });
+    expect((await review()).map((s: any) => s.id)).toEqual([first]);
+    expect(opts.requests().filter((r) => r.includes("<workflow"))).toHaveLength(1);
+  });
+});

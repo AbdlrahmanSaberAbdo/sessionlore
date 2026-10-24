@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import type { HarnessId, HarnessMessage, HarnessSession, TokenUsage } from "../adapter.js";
 import type { Intent, SplitTask } from "@sessionlore/analysis";
 import type { ResolvedProject } from "../project.js";
-import type { Evidence, Scope, Suggestion, SuggestionKind, SuggestionState } from "../suggestion.js";
+import type { Evidence, PriorSuggestion, Scope, Suggestion, SuggestionKind, SuggestionState } from "../suggestion.js";
 import { openDatabase, type Database, type SqlValue } from "./database.js";
 import { migrate } from "./migrations.js";
 
@@ -109,16 +109,39 @@ export interface StoredCluster {
   tasks: ClusterTask[];
 }
 
+/** A Suggestion's content in the format-neutral form. */
+export interface SuggestionContent {
+  title: string;
+  trigger: string;
+  /** Kind-specific content, e.g. `{ steps }` for a Skill. */
+  body: Record<string, unknown>;
+}
+
 /** A Suggestion as written, before it has an id or a state. */
 export type NewSuggestion = {
   title: string;
   scope: Scope;
+  /** True when `scope` is one the person chose, carried over from the Suggestion this replaces. */
+  scopeOverridden?: boolean;
   evidence: readonly Evidence[];
+  /** Keys of the Tasks (or Corrections) it is derived from; see `suggestionFingerprint`. */
+  fingerprint: readonly string[];
+  /** A Pending Suggestion this one supersedes; it is removed in the same transaction. */
+  replaces?: number;
   createdAt: Date;
 } & (
   | { kind: "skill"; workflow: { id: number; name: string }; trigger: string; steps: readonly string[] }
   | { kind: "rule"; correctionCluster: { id: number; name: string }; rule: string }
 );
+
+/** An earlier Suggestion with the Scope it would hand to one replacing it. */
+export type PriorSuggestionRow = PriorSuggestion & { scope: Scope; scopeOverridden: boolean };
+
+function rowScope(row: { scope_kind: string; scope_root: string | null; scope_name: string | null }): Scope {
+  return row.scope_kind === "project" && row.scope_root && row.scope_name
+    ? { kind: "project", project: { name: row.scope_name, path: row.scope_root } }
+    : { kind: "user" };
+}
 
 export interface ClusterCorrection {
   text: string;
@@ -736,13 +759,14 @@ export class Store {
       .map((u) => ({ baseDir: u.base_dir, at: u.used_at, session: u.session_id, harness: u.harness as HarnessId }));
   }
 
-  /** Stores a new Pending Suggestion and returns its id. */
+  /** Stores a new Pending Suggestion, removing the one it `replaces` if any, and returns its id. */
   createSuggestion(input: NewSuggestion): number {
     return this.db.transaction(() => {
       const { scope } = input;
       const id = this.db.run(
-        `INSERT INTO suggestions (kind, state, cluster_id, correction_cluster_id, workflow_name, title, trigger, body, scope_kind, scope_root, scope_name, created_at)
-         VALUES (?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO suggestions (kind, state, cluster_id, correction_cluster_id, workflow_name, title, trigger, body,
+                                  scope_kind, scope_root, scope_name, scope_overridden, fingerprint, created_at)
+         VALUES (?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         input.kind,
         input.kind === "skill" ? input.workflow.id : null,
         input.kind === "rule" ? input.correctionCluster.id : null,
@@ -755,6 +779,8 @@ export class Store {
         scope.kind,
         scope.kind === "project" ? scope.project.path : null,
         scope.kind === "project" ? scope.project.name : null,
+        input.scopeOverridden ? 1 : 0,
+        JSON.stringify(input.fingerprint),
         input.createdAt.toISOString(),
       ).lastInsertRowid;
       input.evidence.forEach((e, position) => {
@@ -773,31 +799,37 @@ export class Store {
           e.correction?.at ?? null,
         );
       });
+      // Removed after the insert, so the new Suggestion never reuses the old one's id.
+      if (input.replaces !== undefined) this.db.run("DELETE FROM suggestions WHERE id = ? AND state = 'Pending'", input.replaces);
       return id;
     });
   }
 
-  /** Ids of the Correction Clusters that already have a Rule Suggestion, in any state. */
-  correctionClustersWithRules(): Set<number> {
-    return new Set(
-      this.db
-        .all<{ correction_cluster_id: number }>(
-          "SELECT DISTINCT correction_cluster_id FROM suggestions WHERE kind = 'rule' AND correction_cluster_id IS NOT NULL",
-        )
-        .map((r) => r.correction_cluster_id),
-    );
-  }
-
-  /** Ids of the Workflows that already have a Suggestion of `kind`, in any state. */
-  workflowsWithSuggestions(kind: SuggestionKind): Set<number> {
-    return new Set(
-      this.db
-        .all<{ cluster_id: number }>(
-          "SELECT DISTINCT cluster_id FROM suggestions WHERE kind = ? AND cluster_id IS NOT NULL",
-          kind,
-        )
-        .map((r) => r.cluster_id),
-    );
+  /** Every Suggestion of `kind` as `suggest` weighs it against a Workflow or Correction Cluster, newest first. */
+  priorSuggestions(kind: SuggestionKind): PriorSuggestionRow[] {
+    return this.db
+      .all<{
+        id: number;
+        state: string;
+        fingerprint: string;
+        edited_at: string | null;
+        scope_kind: string;
+        scope_root: string | null;
+        scope_name: string | null;
+        scope_overridden: number;
+      }>(
+        `SELECT id, state, fingerprint, edited_at, scope_kind, scope_root, scope_name, scope_overridden
+           FROM suggestions WHERE kind = ? ORDER BY id DESC`,
+        kind,
+      )
+      .map((r) => ({
+        id: r.id,
+        state: r.state as SuggestionState,
+        fingerprint: JSON.parse(r.fingerprint) as string[],
+        edited: r.edited_at !== null,
+        scope: rowScope(r),
+        scopeOverridden: r.scope_overridden === 1,
+      }));
   }
 
   /** Suggestions, oldest first, optionally only those in `state`. */
@@ -814,6 +846,38 @@ export class Store {
       "UPDATE suggestions SET state = 'Accepted', accepted_at = ?, installed_files = ? WHERE id = ?",
       at.toISOString(),
       JSON.stringify(installedFiles),
+      id,
+    );
+  }
+
+  /** A Suggestion's content in the format-neutral form: title, trigger and its kind-specific body. */
+  suggestionContent(id: number): SuggestionContent | null {
+    const row = this.db.get<{ title: string; trigger: string; body: string }>(
+      "SELECT title, trigger, body FROM suggestions WHERE id = ?",
+      id,
+    );
+    return row ? { title: row.title, trigger: row.trigger, body: JSON.parse(row.body) as Record<string, unknown> } : null;
+  }
+
+  /** Replaces a Suggestion's content with the person's edit. */
+  editSuggestion(id: number, content: SuggestionContent, at: Date): void {
+    this.db.run(
+      "UPDATE suggestions SET title = ?, trigger = ?, body = ?, edited_at = ? WHERE id = ?",
+      content.title,
+      content.trigger,
+      JSON.stringify(content.body),
+      at.toISOString(),
+      id,
+    );
+  }
+
+  /** Sets the Scope the person chose for a Suggestion. */
+  overrideScope(id: number, scope: Scope): void {
+    this.db.run(
+      "UPDATE suggestions SET scope_kind = ?, scope_root = ?, scope_name = ?, scope_overridden = 1 WHERE id = ?",
+      scope.kind,
+      scope.kind === "project" ? scope.project.path : null,
+      scope.kind === "project" ? scope.project.name : null,
       id,
     );
   }
@@ -873,10 +937,7 @@ export class Store {
             project: e.project_root && e.project_name ? { name: e.project_name, path: e.project_root } : null,
           }),
         );
-      const scope: Scope =
-        row.scope_kind === "project" && row.scope_root && row.scope_name
-          ? { kind: "project", project: { name: row.scope_name, path: row.scope_root } }
-          : { kind: "user" };
+      const scope = rowScope(row);
       const body = JSON.parse(row.body) as { steps?: string[]; rule?: string };
       const base = {
         id: row.id,

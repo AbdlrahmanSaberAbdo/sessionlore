@@ -77,6 +77,63 @@ export function defaultScope(evidence: readonly Pick<Evidence, "project">[]): Sc
   return { kind: "project", project: { name: project.name, path: project.path } };
 }
 
+/**
+ * A Suggestion's fingerprint: one key per Task (for a Skill) or Correction
+ * (for a Rule) it was derived from, stable across Analyses and re-clusters.
+ * Migration 11 backfills the same keys from stored Evidence.
+ */
+export function evidenceFingerprint(evidence: readonly Evidence[]): string[] {
+  return evidence.map(
+    (e) => `${e.session.harness}:${e.session.id}:${e.correction ? `correction:${e.correction.at}` : e.task.at}`,
+  );
+}
+
+/** An earlier Suggestion as `suggest` weighs it against a Workflow or Correction Cluster. */
+export interface PriorSuggestion {
+  id: number;
+  state: SuggestionState;
+  fingerprint: readonly string[];
+  /** The person edited its content. */
+  edited: boolean;
+}
+
+/** What `suggest` should do for a source of Suggestions (a Workflow or Correction Cluster). */
+export type Regeneration =
+  | { action: "create" }
+  | { action: "replace"; id: number }
+  /** An earlier Suggestion still stands for this source. */
+  | { action: "keep"; id: number };
+
+/**
+ * Decides whether a source needs a new Suggestion by comparing its current
+ * members with the fingerprints of earlier ones, never by Cluster id, so it
+ * holds across a re-cluster. An earlier Suggestion is for the same source when
+ * at least half its members are still in it. Accepted and Rejected ones always
+ * stand (a Rejected Suggestion is not proposed again); a Pending one is
+ * replaced only when the source gained meaningfully many members and the
+ * person hasn't edited it.
+ */
+export function regeneration(fingerprint: readonly string[], prior: readonly PriorSuggestion[]): Regeneration {
+  const current = new Set(fingerprint);
+  const same = prior.filter((p) => {
+    const kept = p.fingerprint.filter((key) => current.has(key)).length;
+    return kept > 0 && kept * 2 >= p.fingerprint.length;
+  });
+  if (same.length === 0) return { action: "create" };
+  const settled = same.find((p) => p.state !== "Pending");
+  if (settled) return { action: "keep", id: settled.id };
+  const latest = same.reduce((a, b) => (b.id > a.id ? b : a));
+  const known = new Set(same.flatMap((p) => p.fingerprint));
+  const added = fingerprint.filter((key) => !known.has(key)).length;
+  if (latest.edited || added < meaningfulGrowth(latest.fingerprint.length)) return { action: "keep", id: latest.id };
+  return { action: "replace", id: latest.id };
+}
+
+/** New members a source needs before its Pending Suggestion is rewritten: half as many again, and at least 2. */
+function meaningfulGrowth(members: number): number {
+  return Math.max(2, Math.ceil(members / 2));
+}
+
 /** What a Renderer may look at besides the Suggestion. It never writes; the caller does. */
 export interface RenderContext {
   /** The person's home directory, where User scope files live. */
