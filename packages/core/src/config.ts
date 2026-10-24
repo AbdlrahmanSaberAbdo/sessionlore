@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseModelProviderSection, type ModelProviderSettings } from "./model-provider-settings.js";
+import type { RepeatRule } from "@sessionlore/analysis";
 import { ProjectFilter, parseProjectsSection } from "./project-filter.js";
+import { parseRepeatRuleSection } from "./repeat-rule-settings.js";
 import { dataDir } from "./store/store.js";
 
 /**
@@ -15,6 +17,8 @@ export interface Config {
   projects: ProjectFilter;
   /** Null when the file has no `modelProvider` section. */
   modelProvider: ModelProviderSettings | null;
+  /** Which Clusters qualify as Workflows (and, later, which Correction Clusters earn Rules). */
+  repeatRule: RepeatRule;
 }
 
 /** A config file problem, with a message that names the file and the offending key. */
@@ -34,6 +38,7 @@ type SectionParsers = { [K in keyof Config]: (raw: unknown, ctx: SectionContext)
 const sections: SectionParsers = {
   projects: parseProjectsSection,
   modelProvider: parseModelProviderSection,
+  repeatRule: parseRepeatRuleSection,
 };
 
 export function configPath(homeDir: string): string {

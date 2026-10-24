@@ -50,6 +50,30 @@ export interface SessionTasks {
   tasks: StoredTask[];
 }
 
+export interface TaskToEmbed {
+  key: number;
+  title: string;
+  /** The text of the Task's first User Message. */
+  firstMessage: string | undefined;
+}
+
+export interface ClusterTask {
+  title: string;
+  /** Id of the Session the Task belongs to. */
+  session: string;
+  harness: HarnessId;
+  project: { name: string; path: string } | null;
+  /** When the Task started: its first User Message's timestamp. */
+  at: string;
+}
+
+export interface StoredCluster {
+  id: number;
+  /** Null until the cheap model has named it. */
+  name: string | null;
+  tasks: ClusterTask[];
+}
+
 export interface SaveSessionInput {
   harness: HarnessId;
   session: HarnessSession;
@@ -304,6 +328,134 @@ export class Store {
     });
   }
 
+  /** Tasks with no embedding from `modelId` yet, with the text to embed them as. */
+  tasksToEmbed(modelId: string): TaskToEmbed[] {
+    return this.db
+      .all<{ id: number; title: string; first_message: string | null }>(
+        `SELECT t.id, t.title,
+                (SELECT m.text FROM user_messages m WHERE m.task_id = t.id ORDER BY m.position LIMIT 1) AS first_message
+           FROM tasks t JOIN sessions s ON s.id = t.session_id
+          WHERE t.embedding IS NULL OR t.embedding_model IS NOT ?
+          ORDER BY s.started_at, s.id, t.position`,
+        modelId,
+      )
+      .map((t) => ({ key: t.id, title: t.title, firstMessage: t.first_message ?? undefined }));
+  }
+
+  saveEmbeddings(modelId: string, embeddings: readonly { key: number; vector: readonly number[] }[]): void {
+    this.db.transaction(() => {
+      for (const { key, vector } of embeddings) {
+        this.db.run(
+          "UPDATE tasks SET embedding = ?, embedding_model = ? WHERE id = ?",
+          new Uint8Array(Float32Array.from(vector).buffer),
+          modelId,
+          key,
+        );
+      }
+    });
+  }
+
+  /** Every Cluster with the `modelId` embeddings of its Tasks. */
+  clusterVectors(modelId: string): { id: number; vectors: number[][] }[] {
+    const byCluster = new Map<number, number[][]>();
+    for (const row of this.db.all<{ cluster_id: number; embedding: Uint8Array | null; embedding_model: string | null }>(
+      "SELECT c.id AS cluster_id, t.embedding, t.embedding_model FROM clusters c LEFT JOIN tasks t ON t.cluster_id = c.id ORDER BY c.id, t.id",
+    )) {
+      const vectors = byCluster.get(row.cluster_id) ?? [];
+      byCluster.set(row.cluster_id, vectors);
+      if (row.embedding && row.embedding_model === modelId) vectors.push(decodeVector(row.embedding));
+    }
+    return [...byCluster].map(([id, vectors]) => ({ id, vectors }));
+  }
+
+  /** Embedded Tasks that belong to no Cluster yet, oldest Session first. */
+  unclusteredTasks(modelId: string): { key: number; vector: number[] }[] {
+    return this.db
+      .all<{ id: number; embedding: Uint8Array }>(
+        `SELECT t.id, t.embedding FROM tasks t JOIN sessions s ON s.id = t.session_id
+          WHERE t.cluster_id IS NULL AND t.embedding IS NOT NULL AND t.embedding_model = ?
+          ORDER BY s.started_at, s.id, t.position`,
+        modelId,
+      )
+      .map((t) => ({ key: t.id, vector: decodeVector(t.embedding) }));
+  }
+
+  /** Puts Tasks into existing Clusters or into new ones, then drops Clusters left without Tasks. */
+  placeTasks(placements: readonly ({ task: number } & ({ cluster: number } | { newCluster: number }))[], at: Date): void {
+    this.db.transaction(() => {
+      const created = new Map<number, number>();
+      for (const placement of placements) {
+        let cluster: number;
+        if ("cluster" in placement) cluster = placement.cluster;
+        else {
+          cluster =
+            created.get(placement.newCluster) ??
+            this.db.run("INSERT INTO clusters (created_at) VALUES (?)", at.toISOString()).lastInsertRowid;
+          created.set(placement.newCluster, cluster);
+        }
+        this.db.run("UPDATE tasks SET cluster_id = ? WHERE id = ?", cluster, placement.task);
+      }
+      this.db.run("DELETE FROM clusters WHERE id NOT IN (SELECT cluster_id FROM tasks WHERE cluster_id IS NOT NULL)");
+    });
+  }
+
+  /** Clusters the cheap model has not named yet that have at least `minTasks` Tasks, with their Task titles. */
+  unnamedClusters(minTasks: number): { id: number; taskTitles: string[] }[] {
+    return this.db
+      .all<{ id: number }>(
+        `SELECT c.id FROM clusters c
+          WHERE c.name IS NULL AND (SELECT COUNT(*) FROM tasks t WHERE t.cluster_id = c.id) >= ?
+          ORDER BY c.id`,
+        minTasks,
+      )
+      .map((c) => ({
+        id: c.id,
+        taskTitles: this.db
+          .all<{ title: string }>("SELECT title FROM tasks WHERE cluster_id = ? ORDER BY id", c.id)
+          .map((t) => t.title),
+      }));
+  }
+
+  nameCluster(id: number, name: string): void {
+    this.db.run("UPDATE clusters SET name = ? WHERE id = ?", name, id);
+  }
+
+  /** Every Cluster with its Tasks, oldest Task first. */
+  listClusters(): StoredCluster[] {
+    const clusters = new Map<number, StoredCluster>();
+    for (const row of this.db.all<{
+      cluster_id: number;
+      name: string | null;
+      title: string;
+      position: number;
+      session_id: string;
+      harness: string;
+      project_name: string | null;
+      project_root: string | null;
+      at: string;
+    }>(
+      `SELECT c.id AS cluster_id, c.name, t.title, t.position, s.external_id AS session_id, s.harness,
+              p.name AS project_name, p.root AS project_root,
+              COALESCE((SELECT MIN(m.timestamp) FROM user_messages m WHERE m.task_id = t.id), s.started_at) AS at
+         FROM clusters c
+         JOIN tasks t ON t.cluster_id = c.id
+         JOIN sessions s ON s.id = t.session_id
+         LEFT JOIN projects p ON p.id = s.project_id
+        ORDER BY c.id, at, s.id, t.position`,
+    )) {
+      const cluster = clusters.get(row.cluster_id) ?? { id: row.cluster_id, name: row.name, tasks: [] };
+      clusters.set(row.cluster_id, cluster);
+      cluster.tasks.push({
+        title: row.title,
+        session: row.session_id,
+        harness: row.harness as HarnessId,
+        project: row.project_root && row.project_name ? { name: row.project_name, path: row.project_root } : null,
+        at: row.at,
+      });
+    }
+    return [...clusters.values()];
+  }
+
   private userMessageTexts(sessionKey: number): string[] {
     return this.db
       .all<{ text: string }>("SELECT text FROM user_messages WHERE session_id = ? ORDER BY position", sessionKey)
@@ -316,6 +468,11 @@ export class Store {
     if (!row) throw new Error(`Project ${project.root} was not stored`);
     return row.id;
   }
+}
+
+function decodeVector(blob: Uint8Array): number[] {
+  // Copy first: the blob's bytes need not be aligned for a Float32Array view.
+  return Array.from(new Float32Array(blob.slice().buffer));
 }
 
 /** The per-Session summary columns, in the order the session queries list them. */
