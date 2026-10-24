@@ -80,6 +80,26 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE user_messages ADD COLUMN intent TEXT;
     `,
   },
+  {
+    version: 4,
+    name: "session model and messages",
+    sql: `
+      ALTER TABLE sessions ADD COLUMN model TEXT;
+
+      CREATE TABLE messages (
+        id           INTEGER PRIMARY KEY,
+        session_id   INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        position     INTEGER NOT NULL,
+        role         TEXT NOT NULL,
+        text         TEXT,
+        tool_name    TEXT,
+        tool_status  TEXT,
+        subagent     TEXT,
+        timestamp    TEXT,
+        UNIQUE (session_id, position)
+      );
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {
