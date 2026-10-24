@@ -94,7 +94,7 @@ describe("redaction", () => {
     const provider = scriptedModelProvider(() => oneTask);
 
     await runCli(home, ["scan"]);
-    const analyze = await runCli(home, ["analyze"], { modelProvider: provider.modelProvider });
+    const analyze = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
     expect(analyze.exitCode).toBe(0);
 
     const sent = provider.requests().join("\n");
@@ -143,7 +143,7 @@ describe("analyze and excluded Projects", () => {
 
     await runCli(home, ["scan"]);
     writeConfig(home, { projects: { exclude: ["secret-client"] } });
-    await runCli(home, ["analyze"], { modelProvider: provider.modelProvider });
+    await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
 
     expect(provider.requests().join("\n")).not.toContain("payroll");
     const { sessions } = (await runCli(home, ["tasks", "--json"])).json();
@@ -169,7 +169,7 @@ describe("analyze with a malformed reply", () => {
     const provider = scriptedModelProvider((request) => (request.includes("cart") ? renamed : badReply));
 
     await runCli(home, ["scan"]);
-    const analyze = await runCli(home, ["analyze"], { modelProvider: provider.modelProvider });
+    const analyze = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
 
     expect(analyze.exitCode).toBe(0);
     expect(analyze.stdout).toContain("1 Session analyzed");
@@ -180,7 +180,7 @@ describe("analyze with a malformed reply", () => {
 
     // A reply that leaves a User Message out is malformed too.
     badReply = { tasks: [{ title: "Bump Node", messages: [{ index: 0, intent: "New Task" }] }] };
-    const json = (await runCli(home, ["analyze", "--json"], { modelProvider: provider.modelProvider })).json();
+    const json = (await runCli(home, ["analyze", "--json", "--yes"], { modelProvider: provider.modelProvider })).json();
     expect(json.analyzed).toEqual([]);
     expect(json.failed).toEqual([{ session: bad.id, error: expect.stringContaining("without an Intent") }]);
 
@@ -195,7 +195,7 @@ describe("analyze with a malformed reply", () => {
         },
       ],
     };
-    const retry = (await runCli(home, ["analyze", "--json"], { modelProvider: provider.modelProvider })).json();
+    const retry = (await runCli(home, ["analyze", "--json", "--yes"], { modelProvider: provider.modelProvider })).json();
     expect(retry).toEqual({ analyzed: [bad.id], failed: [] });
     expect(provider.requests()).toHaveLength(4);
   });
@@ -258,7 +258,7 @@ describe("analyze with a Model Provider", () => {
     );
 
     await runCli(home, ["scan"]);
-    const analyze = await runCli(home, ["analyze"], { modelProvider: provider.modelProvider });
+    const analyze = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
     expect(analyze.exitCode).toBe(0);
     expect(analyze.stdout).toContain("2 Sessions analyzed");
 

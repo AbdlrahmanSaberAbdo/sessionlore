@@ -21,6 +21,12 @@ export interface CliEnvironment {
   nodeVersion: string;
   stdout(text: string): void;
   stderr(text: string): void;
+  /**
+   * Shows `question` and resolves to the line the person types. Absent when
+   * nobody can answer (stdin is not a terminal); commands that need
+   * confirmation then require `--yes`.
+   */
+  ask?: (question: string) => Promise<string>;
   clock: Clock;
   modelProvider?: ModelProvider;
   embedder?: Embedder;
@@ -31,6 +37,10 @@ export interface CliEnvironment {
 interface CommandContext {
   app: App;
   json: boolean;
+  /** `--yes`: go ahead without asking for confirmation. */
+  yes: boolean;
+  /** Asks the person a question; absent when there is no terminal to ask on. */
+  ask?: (question: string) => Promise<string>;
   /** Positional arguments after the command name. */
   args: string[];
   options: { showRedacted?: string };
@@ -51,7 +61,7 @@ interface Command {
 const commands: Record<string, Command> = {
   analyze: {
     summary: "Split new or changed Sessions into Tasks and label each User Message's Intent",
-    async run({ app, json, options, modelProvider, out, err }) {
+    async run({ app, json, yes, ask, options, modelProvider, out, err }) {
       if (options.showRedacted !== undefined) {
         const request = app.redactedRequest(options.showRedacted);
         if (request === null) {
@@ -63,6 +73,24 @@ const commands: Record<string, Command> = {
       if (!modelProvider.ok) {
         err(modelProvider.problem);
         return 1;
+      }
+      const estimate = app.estimateAnalysis();
+      // With --json, stdout carries only the result; the estimate and question go to stderr.
+      const say = json ? err : out;
+      say(`${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze. Estimated use:\n`);
+      for (const { model, tokens } of estimate.models) {
+        say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens\n`);
+      }
+      if (!yes) {
+        if (!ask) {
+          err("Analysis needs confirmation before it calls the Model Provider. Run `sessionlore analyze --yes` to go ahead.\n");
+          return 1;
+        }
+        const answer = await ask("Continue? [y/N] ");
+        if (!/^\s*y(es)?\s*$/i.test(answer)) {
+          say("Nothing analyzed.\n");
+          return;
+        }
       }
       const result = await app.analyze();
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
@@ -119,6 +147,10 @@ function plural(count: number, word: string): string {
   return count === 1 ? word : `${word}s`;
 }
 
+function count(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
 function firstLine(text: string): string {
   const line = text.split("\n", 1)[0] ?? "";
   return line.length > 100 ? `${line.slice(0, 99)}…` : line;
@@ -130,6 +162,7 @@ function usage(): string {
     `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\n` +
     `Options:\n  --json                     Machine-readable output\n` +
     `  --last N                   scan: read only the N most recent Sessions\n` +
+    `  --yes, -y                  analyze: skip the cost estimate confirmation\n` +
     `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n`
   );
 }
@@ -149,6 +182,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       allowPositionals: true,
       options: {
         json: { type: "boolean", default: false },
+        yes: { type: "boolean", short: "y", default: false },
         help: { type: "boolean", short: "h" },
         "show-redacted": { type: "string" },
         last: { type: "string" },
@@ -197,6 +231,8 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     const exitCode = await command.run({
       app,
       json: parsed.values.json ?? false,
+      yes: parsed.values.yes ?? false,
+      ask: io.ask,
       args: parsed.positionals.slice(1),
       options: { showRedacted: parsed.values["show-redacted"] },
       modelProvider,

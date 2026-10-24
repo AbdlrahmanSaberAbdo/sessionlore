@@ -2,7 +2,7 @@ import type { Adapter, HarnessContext, HarnessId, SessionSource } from "./adapte
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { ProjectFilter } from "./project-filter.js";
 import { resolveProject } from "./project.js";
-import { splitIntoTasks, taskSplitPrompt } from "@sessionlore/analysis";
+import { estimateTaskSplit, splitIntoTasks, taskSplitPrompt, type TokenCount } from "@sessionlore/analysis";
 import { Store, type SessionTasks, type StoredSession } from "./store/store.js";
 
 /**
@@ -48,6 +48,13 @@ export interface AnalysisResult {
   /** Ids of the Sessions analyzed. */
   analyzed: string[];
   failed: { session: string; error: string }[];
+}
+
+/** Expected token use per model for the Sessions the next Analysis would process. */
+export interface AnalysisEstimate {
+  /** Number of new or changed Sessions. */
+  sessions: number;
+  models: { model: string; tokens: TokenCount }[];
 }
 
 export class App {
@@ -130,17 +137,37 @@ export class App {
       .filter((s) => this.projectFilter.allows(s.project && { root: s.project.path, name: s.project.name }));
   }
 
+  /** What the next `analyze()` would send, estimated without calling the Model Provider. */
+  estimateAnalysis(): AnalysisEstimate {
+    const modelProvider = this.requireModelProvider();
+    const sessions = this.sessionsToAnalyze();
+    const tokens = { input: 0, output: 0 };
+    for (const session of sessions) {
+      const estimate = estimateTaskSplit(session.userMessages);
+      tokens.input += estimate.input;
+      tokens.output += estimate.output;
+    }
+    return { sessions: sessions.length, models: [{ model: modelProvider.cheap.modelId, tokens }] };
+  }
+
+  private requireModelProvider(): ModelProvider {
+    if (!this.deps.modelProvider) throw new Error("No Model Provider is configured.");
+    return this.deps.modelProvider;
+  }
+
+  private sessionsToAnalyze() {
+    return this.store.sessionsToAnalyze().filter((s) => this.projectFilter.allows(s.project));
+  }
+
   /**
    * Splits every new or changed Session into Tasks and labels the Intent of
    * each User Message with the cheap model. A Session that fails is reported
    * and left for the next Analysis; the others still complete.
    */
   async analyze(): Promise<AnalysisResult> {
-    const modelProvider = this.deps.modelProvider;
-    if (!modelProvider) throw new Error("No Model Provider is configured.");
+    const modelProvider = this.requireModelProvider();
     const result: AnalysisResult = { analyzed: [], failed: [] };
-    const sessions = this.store.sessionsToAnalyze().filter((s) => this.projectFilter.allows(s.project));
-    for (const session of sessions) {
+    for (const session of this.sessionsToAnalyze()) {
       try {
         const tasks = await splitIntoTasks(modelProvider.cheap, session.userMessages);
         this.store.saveAnalysis(session.key, session.fingerprint, tasks);

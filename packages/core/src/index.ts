@@ -10,6 +10,7 @@ export type {
 export {
   App,
   type AppDependencies,
+  type AnalysisEstimate,
   type AnalysisResult,
   type ScanResult,
   type ScanOptions,

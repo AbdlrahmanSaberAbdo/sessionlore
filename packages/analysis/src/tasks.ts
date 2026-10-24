@@ -46,6 +46,30 @@ export function taskSplitPrompt(messages: readonly string[]): string {
   return messages.map((text, index) => `<message index="${index}">\n${redact(text)}\n</message>`).join("\n");
 }
 
+/** Tokens a request and its reply used, or are expected to use. */
+export interface TokenCount {
+  input: number;
+  output: number;
+}
+
+/** Rough characters per token for English text and code. */
+const charsPerToken = 4;
+/** The JSON schema and wrapping the AI SDK adds to every structured request. */
+const requestOverheadTokens = 250;
+/** Expected reply size: a Task title plus one labelled entry per User Message. */
+const replyTokensPerTask = 30;
+const replyTokensPerMessage = 15;
+
+/** The tokens splitting these User Messages into Tasks is expected to use, without calling the Model Provider. */
+export function estimateTaskSplit(messages: readonly string[]): TokenCount {
+  if (messages.length === 0) return { input: 0, output: 0 };
+  const chars = system.length + taskSplitPrompt(messages).length;
+  return {
+    input: Math.ceil(chars / charsPerToken) + requestOverheadTokens,
+    output: replyTokensPerTask + replyTokensPerMessage * messages.length,
+  };
+}
+
 /** Splits a Session into Tasks and labels the Intent of every User Message, using `model`. */
 export async function splitIntoTasks(model: Exclude<LanguageModel, string>, messages: readonly string[]): Promise<SplitTask[]> {
   if (messages.length === 0) return [];

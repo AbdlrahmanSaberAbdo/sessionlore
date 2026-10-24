@@ -15,6 +15,13 @@ export interface RunOptions {
   modelProvider?: ModelProvider;
   embedder?: Embedder;
   nodeVersion?: string;
+  /**
+   * Lines the person types, one per question the CLI asks; each question and
+   * answer is echoed to stdout as a terminal would show it. Omit to run
+   * without a terminal, as in a pipe or CI. Asking more questions than there
+   * are answers fails the test.
+   */
+  answers?: string[];
 }
 
 export interface CliResult {
@@ -38,6 +45,15 @@ export const fixedClock =(iso: string): Clock => ({ now: () => new Date(iso) });
 export async function runCli(home: FixtureHome, args: string[], options: RunOptions = {}): Promise<CliResult> {
   let stdout = "";
   let stderr = "";
+  const answers = options.answers && [...options.answers];
+  const ask =
+    answers &&
+    (async (question: string) => {
+      const answer = answers.shift();
+      if (answer === undefined) throw new Error(`The CLI asked "${question}" but the test supplied no more answers`);
+      stdout += `${question}${answer}\n`;
+      return answer;
+    });
   const exitCode = await main(args, {
     homeDir: home.path,
     env: { HOME: home.path, ...options.env },
@@ -48,6 +64,7 @@ export async function runCli(home: FixtureHome, args: string[], options: RunOpti
     stderr: (text) => {
       stderr += text;
     },
+    ask,
     clock: options.clock ?? fixedClock("2026-06-01T12:00:00.000Z"),
     modelProvider: options.modelProvider,
     embedder: options.embedder,
