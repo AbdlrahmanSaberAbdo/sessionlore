@@ -52,23 +52,28 @@ export const claudeCodeAdapter: Adapter = {
     let endedAt: Date | null = null;
     const userMessages: HarnessUserMessage[] = [];
     const main = new AssistantMessages();
+    const tree = new MessageTree();
 
     for await (const record of readRecords(source.location)) {
-      if (record.type !== "user" && record.type !== "assistant") continue;
+      tree.add(record);
+      if (!isConversation(record)) continue;
       const timestamp = parseTimestamp(record.timestamp);
       if (timestamp) {
         if (!startedAt || timestamp < startedAt) startedAt = timestamp;
         if (!endedAt || timestamp > endedAt) endedAt = timestamp;
       }
       if (!cwd && typeof record.cwd === "string") cwd = record.cwd;
+    }
+    if (!startedAt || !endedAt) return null;
 
+    for (const record of tree.activeBranch()) {
       if (record.type === "assistant") main.add(record);
+      const timestamp = parseTimestamp(record.timestamp);
       if (record.type === "user" && timestamp) {
         const text = typedUserText(record);
         if (text !== null) userMessages.push({ text, timestamp });
       }
     }
-    if (!startedAt || !endedAt) return null;
 
     // A subagent's records are all written by agents, never by the person: only its token usage counts.
     const subagents = await subagentFiles(source.location);
@@ -93,6 +98,53 @@ export const claudeCodeAdapter: Adapter = {
 };
 
 type JsonRecord = Record<string, unknown>;
+
+function isConversation(record: JsonRecord): boolean {
+  return (record.type === "user" || record.type === "assistant") && record.isSidechain !== true;
+}
+
+/**
+ * Claude Code records form a tree through `parentUuid`: editing an earlier
+ * message, rewinding or retrying starts a new branch, and the abandoned
+ * branch stays in the file. The conversation is the branch that ends at the
+ * last conversation record written, followed back to its root.
+ */
+class MessageTree {
+  /** Every record with a uuid; non-conversation ones only as links in the chain. */
+  private readonly byUuid = new Map<string, JsonRecord>();
+  private readonly inFileOrder: JsonRecord[] = [];
+  private leaf: JsonRecord | null = null;
+
+  add(record: JsonRecord): void {
+    const conversation = isConversation(record);
+    if (conversation) this.inFileOrder.push(record);
+    if (typeof record.uuid !== "string") return;
+    // Only keep what following the chain needs; other records (e.g. API request snapshots) can be large.
+    this.byUuid.set(
+      record.uuid,
+      conversation ? record : { parentUuid: record.parentUuid, logicalParentUuid: record.logicalParentUuid },
+    );
+    if (conversation) this.leaf = record;
+  }
+
+  /** The conversation records of the active branch, oldest first. */
+  activeBranch(): JsonRecord[] {
+    // Records without uuids (very old or unusual files) can't be followed; fall back to file order.
+    if (!this.leaf) return this.inFileOrder;
+    const branch: JsonRecord[] = [];
+    const seen = new Set<string>();
+    let current: JsonRecord | undefined = this.leaf;
+    while (current) {
+      if (isConversation(current)) branch.push(current);
+      // A compaction boundary has no parentUuid but points at the pre-compaction conversation logically.
+      const parent: unknown = current.parentUuid ?? current.logicalParentUuid;
+      if (typeof parent !== "string" || seen.has(parent)) break;
+      seen.add(parent);
+      current = this.byUuid.get(parent);
+    }
+    return branch.reverse();
+  }
+}
 
 /** Transcripts of the subagent runs started in the Session stored at `sessionFile`. */
 async function subagentFiles(sessionFile: string): Promise<string[]> {

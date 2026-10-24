@@ -98,4 +98,24 @@ describe("scan of Claude Code Sessions: the tricky cases", () => {
 
     expect(sessions[0].userMessageCount).toBe(1);
   });
+
+  it("follows the message tree, leaving out branches the conversation abandoned", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, {
+      cwd: repo,
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [
+        turn.user("rename the cart module"),
+        turn.assistant("Renamed it to basket."),
+        // The person edited their next message, so this branch was left behind.
+        turn.abandoned([turn.user("now delete the old tests"), turn.assistant("Deleted them.")]),
+        turn.user("now update the imports"),
+        turn.assistant("Updated the imports."),
+      ],
+    });
+
+    const [session] = await scanAndList();
+
+    expect(session).toMatchObject({ userMessageCount: 2, assistantTurnCount: 2 });
+  });
 });
