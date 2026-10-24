@@ -135,7 +135,7 @@ export const migrations: readonly Migration[] = [
     `,
   },
   {
-    version: 7,
+    version: 8,
     name: "cluster redirects",
     sql: `
       -- A Cluster a re-cluster folded into another (ADR 0008): its old id keeps resolving to the Cluster it mapped to.
