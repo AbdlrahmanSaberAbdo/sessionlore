@@ -158,4 +158,22 @@ describe("scan of Cursor Sessions", () => {
     const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
     expect(sessions).toHaveLength(1);
   });
+
+  it("reports zero updated Cursor Sessions when nothing changed, and one when a Session changed", async () => {
+    const repo = home.gitRepo("code/shop");
+    const composers = [
+      { id: "first", folder: repo, createdAt: "2026-05-01T09:00:00.000Z", bubbles: [bubble.user("one")] },
+      { id: "second", folder: repo, createdAt: "2026-05-02T09:00:00.000Z", bubbles: [bubble.user("two")] },
+    ];
+    writeCursorDatabase(home, composers);
+
+    const first = (await runCli(home, ["scan", "--json"])).json();
+    const second = (await runCli(home, ["scan", "--json"])).json();
+    writeCursorDatabase(home, [composers[0]!, { ...composers[1]!, bubbles: [bubble.user("two"), bubble.user("and more")] }]);
+    const third = (await runCli(home, ["scan", "--json"])).json();
+
+    expect(first.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 2, updated: 0 }]);
+    expect(second.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 0, updated: 0 }]);
+    expect(third.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 0, updated: 1 }]);
+  });
 });

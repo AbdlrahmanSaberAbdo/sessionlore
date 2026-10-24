@@ -22,6 +22,8 @@ export interface HarnessScanResult {
   harness: HarnessId;
   name: string;
   added: number;
+  /** Sessions already in the store whose content changed since the last Scan. */
+  updated: number;
 }
 
 export interface ScanResult {
@@ -50,8 +52,11 @@ export class App {
       const storages = await adapter.discover(this.deps.harnessContext);
       if (storages.length === 0) continue; // this Harness has no data on this machine
       let added = 0;
+      let updated = 0;
       for (const storage of storages) {
         for await (const source of adapter.listSessions(storage)) {
+          // Incremental: a Session whose change marker is unchanged is not read again.
+          if (this.store.sessionFingerprint(adapter.harness, source.externalId) === source.changeMarker) continue;
           const session = await adapter.readSession(source);
           if (!session) continue;
           const project = session.cwd ? resolveProject(session.cwd) : null;
@@ -63,9 +68,10 @@ export class App {
             scanId,
           });
           if (result.added) added += 1;
+          else updated += 1;
         }
       }
-      harnesses.push({ harness: adapter.harness, name: adapter.displayName, added });
+      harnesses.push({ harness: adapter.harness, name: adapter.displayName, added, updated });
     }
     this.store.finishScan(scanId, this.deps.clock.now());
     return { harnesses };
