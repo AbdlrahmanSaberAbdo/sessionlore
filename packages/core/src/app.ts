@@ -52,6 +52,7 @@ export class App {
   /** Reads every Harness's storage into the store. Never writes to Harness storage. */
   async scan(): Promise<ScanResult> {
     const scanId = this.store.startScan(this.deps.clock.now());
+    this.store.removeSessionsUnless((project) => this.projectFilter.allows(project));
     const harnesses: HarnessScanResult[] = [];
     for (const adapter of this.deps.adapters) {
       let added = 0;
@@ -78,6 +79,9 @@ export class App {
   }
 
   listSessions(): StoredSession[] {
-    return this.store.listSessions();
+    // Filtered here too, so a Project excluded since the last Scan is never shown.
+    return this.store
+      .listSessions()
+      .filter((s) => this.projectFilter.allows(s.project && { root: s.project.path, name: s.project.name }));
   }
 }

@@ -57,3 +57,65 @@ describe("excluding Projects in the config", () => {
     expect(await listedProjects()).toEqual(["shop"]);
   });
 });
+
+describe("including only some Projects in the config", () => {
+  it("stores only Sessions of the listed Projects", async () => {
+    sessionIn(home.gitRepo("code/shop"));
+    sessionIn(home.gitRepo("code/blog"));
+    sessionIn(home.gitRepo("work/api"));
+    sessionIn(home.folder("scratch"));
+    writeConfig(home, { projects: { include: ["shop", "~/work/*"] } });
+
+    await runCli(home, ["scan"]);
+
+    expect(await listedProjects()).toEqual(["api", "shop"]);
+  });
+
+  it("still leaves out excluded Projects that the include list covers", async () => {
+    sessionIn(home.gitRepo("work/api"));
+    sessionIn(home.gitRepo("work/payroll"));
+    writeConfig(home, { projects: { include: ["~/work/**"], exclude: ["payroll"] } });
+
+    await runCli(home, ["scan"]);
+
+    expect(await listedProjects()).toEqual(["api"]);
+  });
+});
+
+describe("changing the config after a Scan", () => {
+  // Each test drops the config again before listing, so it sees what the store holds.
+  it("removes Sessions of a newly excluded Project from the store on the next Scan", async () => {
+    sessionIn(home.gitRepo("code/shop"));
+    sessionIn(home.gitRepo("code/secret"));
+    await runCli(home, ["scan"]);
+    expect(await listedProjects()).toEqual(["secret", "shop"]);
+
+    writeConfig(home, { projects: { exclude: ["secret"] } });
+    expect((await runCli(home, ["scan"])).exitCode).toBe(0);
+
+    writeConfig(home, {});
+    expect(await listedProjects()).toEqual(["shop"]);
+  });
+
+  it("hides a newly excluded Project from `sessions` even before the next Scan", async () => {
+    sessionIn(home.gitRepo("code/shop"));
+    sessionIn(home.gitRepo("code/secret"));
+    await runCli(home, ["scan"]);
+
+    writeConfig(home, { projects: { exclude: ["secret"] } });
+
+    expect(await listedProjects()).toEqual(["shop"]);
+  });
+
+  it("removes Sessions outside a newly set include list on the next Scan", async () => {
+    sessionIn(home.gitRepo("code/shop"));
+    sessionIn(home.folder("scratch"));
+    await runCli(home, ["scan"]);
+
+    writeConfig(home, { projects: { include: ["shop"] } });
+    await runCli(home, ["scan"]);
+
+    writeConfig(home, {});
+    expect(await listedProjects()).toEqual(["shop"]);
+  });
+});
