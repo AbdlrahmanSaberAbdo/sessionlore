@@ -101,7 +101,8 @@ export class App {
     const modelProvider = this.deps.modelProvider;
     if (!modelProvider) throw new Error("No Model Provider is configured.");
     const result: AnalysisResult = { analyzed: [], failed: [] };
-    for (const session of this.store.sessionsToAnalyze()) {
+    const sessions = this.store.sessionsToAnalyze().filter((s) => this.projectFilter.allows(s.project));
+    for (const session of sessions) {
       try {
         const tasks = await splitIntoTasks(modelProvider.cheap, session.userMessages);
         this.store.saveAnalysis(session.key, session.fingerprint, tasks);
@@ -115,11 +116,14 @@ export class App {
 
   /** The redacted text Analysis would send for a Session, or null if no Session has that id. */
   redactedRequest(sessionId: string): string | null {
-    const messages = this.store.sessionUserMessages(sessionId);
-    return messages ? taskSplitPrompt(messages) : null;
+    const session = this.store.sessionWithMessages(sessionId);
+    if (!session || !this.projectFilter.allows(session.project)) return null;
+    return taskSplitPrompt(session.userMessages);
   }
 
   listTasks(): SessionTasks[] {
-    return this.store.listTasks();
+    return this.store
+      .listTasks()
+      .filter((s) => this.projectFilter.allows(s.project && { root: s.project.path, name: s.project.name }));
   }
 }

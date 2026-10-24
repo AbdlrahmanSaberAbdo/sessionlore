@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import type { HarnessId, HarnessSession } from "../adapter.js";
 import type { Intent, SplitTask } from "@sessionlore/analysis";
 import type { ResolvedProject } from "../project.js";
-import { openDatabase, type Database } from "./database.js";
+import { openDatabase, type Database, type SqlValue } from "./database.js";
 import { migrate } from "./migrations.js";
 
 /** sessionlore's local data folder inside a home directory. */
@@ -30,6 +30,7 @@ export interface SessionToAnalyze {
   key: number;
   id: string;
   fingerprint: string;
+  project: ResolvedProject | null;
   /** User Message texts in order. */
   userMessages: string[];
 }
@@ -186,23 +187,37 @@ export class Store {
 
   /** Sessions never analyzed, or changed since their last Analysis. */
   sessionsToAnalyze(): SessionToAnalyze[] {
-    const sessions = this.db.all<{ id: number; external_id: string; scan_fingerprint: string }>(
-      `SELECT id, external_id, scan_fingerprint FROM sessions
-        WHERE analyzed_fingerprint IS NULL OR analyzed_fingerprint <> scan_fingerprint
-        ORDER BY started_at, id`,
+    return this.sessionsWithMessages(
+      "WHERE s.analyzed_fingerprint IS NULL OR s.analyzed_fingerprint <> s.scan_fingerprint",
+    );
+  }
+
+  /** A stored Session with its User Messages, or null if no Session has that id. */
+  sessionWithMessages(id: string): SessionToAnalyze | null {
+    return this.sessionsWithMessages("WHERE s.external_id = ?", id)[0] ?? null;
+  }
+
+  private sessionsWithMessages(where: string, ...params: SqlValue[]): SessionToAnalyze[] {
+    const sessions = this.db.all<{
+      id: number;
+      external_id: string;
+      scan_fingerprint: string;
+      project_name: string | null;
+      project_root: string | null;
+    }>(
+      `SELECT s.id, s.external_id, s.scan_fingerprint, p.name AS project_name, p.root AS project_root
+         FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
+        ${where}
+        ORDER BY s.started_at, s.id`,
+      ...params,
     );
     return sessions.map((s) => ({
       key: s.id,
       id: s.external_id,
       fingerprint: s.scan_fingerprint,
+      project: s.project_root && s.project_name ? { root: s.project_root, name: s.project_name } : null,
       userMessages: this.userMessageTexts(s.id),
     }));
-  }
-
-  /** User Message texts of a stored Session, or null if no Session has that id. */
-  sessionUserMessages(id: string): string[] | null {
-    const row = this.db.get<{ id: number }>("SELECT id FROM sessions WHERE external_id = ? ORDER BY id LIMIT 1", id);
-    return row ? this.userMessageTexts(row.id) : null;
   }
 
   /** Replaces a Session's Tasks with the result of analyzing the content identified by `fingerprint`. */

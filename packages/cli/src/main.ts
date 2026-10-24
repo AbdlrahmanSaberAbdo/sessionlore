@@ -119,7 +119,7 @@ function firstLine(text: string): string {
 
 function usage(): string {
   const lines = Object.entries(commands).map(([name, c]) => `  ${name.padEnd(10)} ${c.summary}`);
-  return `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n`;
+  return `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\nOptions:\n  --show-redacted <session>  With analyze: print the redacted text Analysis would send for a Session\n`;
 }
 
 /** Runs the CLI and returns its exit code. */

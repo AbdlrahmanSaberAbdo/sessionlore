@@ -132,6 +132,25 @@ describe("redaction", () => {
   });
 });
 
+describe("analyze and excluded Projects", () => {
+  it("neither analyzes nor shows Sessions of a Project excluded after they were scanned", async () => {
+    const shop = home.gitRepo("code/shop");
+    const secret = home.gitRepo("code/secret-client");
+    const kept = writeClaudeSession(home, { cwd: shop, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("add tests")] });
+    writeClaudeSession(home, { cwd: secret, startedAt: "2026-05-02T09:00:00.000Z", turns: [turn.user("audit payroll")] });
+    const reply = { tasks: [{ title: "Do it", messages: [{ index: 0, intent: "New Task" }] }] };
+    const provider = scriptedModelProvider(() => reply);
+
+    await runCli(home, ["scan"]);
+    writeConfig(home, { projects: { exclude: ["secret-client"] } });
+    await runCli(home, ["analyze"], { modelProvider: provider.modelProvider });
+
+    expect(provider.requests().join("\n")).not.toContain("payroll");
+    const { sessions } = (await runCli(home, ["tasks", "--json"])).json();
+    expect(sessions.map((s: any) => s.id)).toEqual([kept.id]);
+  });
+});
+
 describe("analyze with a malformed reply", () => {
   it("reports the failure for that Session, analyzes the others, and retries it on the next Analysis", async () => {
     const repo = home.gitRepo("code/shop");
