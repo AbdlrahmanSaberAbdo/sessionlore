@@ -77,6 +77,11 @@ const commands: Record<string, Command> = {
       const estimate = app.estimateAnalysis();
       // With --json, stdout carries only the result; the estimate and question go to stderr.
       const say = json ? err : out;
+      if (estimate.sessions === 0) {
+        say("No new or changed Sessions to analyze.\n");
+        if (json) out(JSON.stringify(await app.analyze(), null, 2) + "\n");
+        return;
+      }
       say(`${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze. Estimated use:\n`);
       for (const { model, tokens } of estimate.models) {
         say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens\n`);
