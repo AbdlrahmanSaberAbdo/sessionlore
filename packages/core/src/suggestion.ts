@@ -45,6 +45,20 @@ interface SuggestionBase {
   rejectedAt: string | null;
   /** Files written when it was Accepted. */
   installedFiles: string[];
+  /** The existing Skill or Rule it updates; null when it creates something new. */
+  target: Target | null;
+}
+
+/**
+ * An existing Skill or Rule the person owns that a Suggestion updates. A
+ * Skill Target is its `SKILL.md`; a Rule Target is one line of a `CLAUDE.md`.
+ */
+export type Target = { kind: "skill"; path: string; name: string } | { kind: "rule"; path: string; line: string };
+
+/** A plugin skill a companion Skill works alongside. Plugin skills are never Targets. */
+export interface PluginSkillRef {
+  plugin: string;
+  name: string;
 }
 
 export interface SkillSuggestion extends SuggestionBase {
@@ -54,6 +68,8 @@ export interface SkillSuggestion extends SuggestionBase {
   steps: string[];
   /** The Workflow it came from; null once that Workflow no longer exists. */
   workflow: { id: number; name: string } | null;
+  /** Set when a plugin skill already covers part of the Workflow and this Skill complements it. */
+  companionOf: PluginSkillRef | null;
 }
 
 export interface RuleSuggestion extends SuggestionBase {
@@ -85,6 +101,23 @@ export interface RenderContext {
   readFile(path: string): string | null;
 }
 
+/** What a Renderer may look at when listing what is installed. */
+export interface InstalledContext extends RenderContext {
+  /** Projects whose own files count, besides the User scope ones. */
+  projects: readonly ProjectRef[];
+  /** Entries of a folder, or [] when it doesn't exist. */
+  listDir(path: string): { name: string; isDirectory: boolean }[];
+}
+
+/**
+ * A Skill or Rule already installed in a Harness, read before suggesting so
+ * nothing is proposed twice. `plugin` is set for a plugin skill, which is
+ * only ever looked at for overlap.
+ */
+export type InstalledItem =
+  | { kind: "skill"; path: string; name: string; description: string; content: string; plugin: string | null }
+  | { kind: "rule"; path: string; line: string };
+
 /** A whole file a Renderer wants written: its absolute path and complete new content. */
 export interface RenderedFile {
   path: string;
@@ -107,4 +140,6 @@ export interface Renderer {
   readonly kind: SuggestionKind;
   /** Throws RenderError when the Suggestion can't be installed. */
   render(suggestion: Suggestion, context: RenderContext): RenderedFile[];
+  /** The installed Skills or Rules of this Renderer's kind and Harness. Reads only. */
+  installed?(context: InstalledContext): InstalledItem[];
 }
