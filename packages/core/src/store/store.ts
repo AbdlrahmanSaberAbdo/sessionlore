@@ -159,6 +159,21 @@ export class Store {
     return { ...session, messages };
   }
 
+  /**
+   * Deletes every stored Session whose Project `keep` rejects (`null` for
+   * Sessions without a Project), along with rejected Projects themselves.
+   */
+  removeSessionsUnless(keep: (project: ResolvedProject | null) => boolean): void {
+    this.db.transaction(() => {
+      for (const project of this.db.all<{ id: number; root: string; name: string }>("SELECT id, root, name FROM projects")) {
+        if (keep({ root: project.root, name: project.name })) continue;
+        this.db.run("DELETE FROM sessions WHERE project_id = ?", project.id);
+        this.db.run("DELETE FROM projects WHERE id = ?", project.id);
+      }
+      if (!keep(null)) this.db.run("DELETE FROM sessions WHERE project_id IS NULL");
+    });
+  }
+
   /** All stored Sessions, latest first. */
   listSessions(): StoredSession[] {
     return this.querySessions("");

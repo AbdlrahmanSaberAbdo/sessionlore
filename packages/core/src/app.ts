@@ -1,5 +1,6 @@
 import type { Adapter, HarnessContext, HarnessId, ScanWarnings } from "./adapter.js";
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
+import { ProjectFilter } from "./project-filter.js";
 import { resolveProject } from "./project.js";
 import { Store, type StoredSession, type StoredSessionDetail } from "./store/store.js";
 
@@ -16,6 +17,8 @@ export interface AppDependencies {
   clock: Clock;
   modelProvider?: ModelProvider;
   embedder?: Embedder;
+  /** Which Projects may be stored and shown. Defaults to all of them. */
+  projectFilter?: ProjectFilter;
 }
 
 export interface HarnessScanResult {
@@ -47,6 +50,10 @@ export class App {
     return new App(deps, Store.open(deps.storePath));
   }
 
+  private get projectFilter(): ProjectFilter {
+    return this.deps.projectFilter ?? ProjectFilter.allowAll();
+  }
+
   close(): void {
     this.store.close();
   }
@@ -54,6 +61,7 @@ export class App {
   /** Reads every Harness's storage into the store. Never writes to Harness storage. */
   async scan(): Promise<ScanResult> {
     const scanId = this.store.startScan(this.deps.clock.now());
+    this.store.removeSessionsUnless((project) => this.projectFilter.allows(project));
     const harnesses: HarnessScanResult[] = [];
     for (const adapter of this.deps.adapters) {
       const storages = await adapter.discover(this.deps.harnessContext);
@@ -69,6 +77,7 @@ export class App {
           const session = await adapter.readSession(source, warnings);
           if (!session) continue;
           const project = session.cwd ? resolveProject(session.cwd) : null;
+          if (!this.projectFilter.allows(project)) continue;
           const result = this.store.saveSession({
             harness: adapter.harness,
             session,
@@ -93,7 +102,10 @@ export class App {
   }
 
   listSessions(): StoredSession[] {
-    return this.store.listSessions();
+    // Filtered here too, so a Project excluded since the last Scan is never shown.
+    return this.store
+      .listSessions()
+      .filter((s) => this.projectFilter.allows(s.project && { root: s.project.path, name: s.project.name }));
   }
 
   getSession(id: string): StoredSessionDetail | null {
