@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Clock, Embedder, ModelProvider } from "@sessionlore/core";
 import type { FixtureHome } from "@sessionlore/fixtures";
 import { main } from "../../src/index.js";
@@ -23,7 +25,15 @@ export interface CliResult {
   json<T = any>(): T;
 }
 
-export const fixedClock = (iso: string): Clock => ({ now: () => new Date(iso) });
+/** Writes sessionlore's config file in the fixture home. Pass a string to write it verbatim. */
+export function writeConfig(home: FixtureHome, config: unknown): string {
+  const file = home.resolve(join(".sessionlore", "config.json"));
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, typeof config === "string" ? config : JSON.stringify(config, null, 2));
+  return file;
+}
+
+export const fixedClock =(iso: string): Clock => ({ now: () => new Date(iso) });
 
 export async function runCli(home: FixtureHome, args: string[], options: RunOptions = {}): Promise<CliResult> {
   let stdout = "";
