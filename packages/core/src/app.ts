@@ -24,6 +24,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   defaultScope,
+  evidenceFingerprint,
+  regeneration,
   type Evidence,
   type Scope,
   type RenderContext,
@@ -189,6 +191,8 @@ export interface ModelUsage {
 export interface SuggestResult {
   /** Ids of the Suggestions written. */
   created: number[];
+  /** Ids of Pending Suggestions removed because one in `created` supersedes them. */
+  replaced: number[];
   failed: { workflow: number; error: string }[];
   usage: ModelUsage[];
 }
@@ -691,24 +695,29 @@ export class App {
   }
 
   /**
-   * Writes a Skill Suggestion with the strong model for every Workflow that has
-   * no Suggestion yet. A Workflow whose Suggestion was Rejected gets none, so
-   * it isn't proposed again. Nothing is written outside the store.
+   * Writes a Skill Suggestion with the strong model for every Workflow that
+   * needs one (see `regeneration`): none yet, or a Pending one written before
+   * the Workflow gained several new Tasks, which the new one replaces. A
+   * Workflow whose Suggestion was Rejected gets none, so it isn't proposed
+   * again. Nothing is written outside the store.
    */
   async suggest(options: AnalyzeOptions = {}): Promise<SuggestResult> {
     const { signal } = options;
     const model = this.requireModelProvider().strong;
     const usage = new UsageTally(this.deps.prices);
-    const result: SuggestResult = { created: [], failed: [], usage: [] };
-    const suggested = this.store.workflowsWithSuggestions("skill");
+    const result: SuggestResult = { created: [], replaced: [], failed: [], usage: [] };
+    const prior = this.store.priorSuggestions("skill");
     for (const workflow of this.listWorkflows().workflows) {
       if (signal?.aborted) break;
-      if (suggested.has(workflow.id)) continue;
       const evidence: Evidence[] = workflow.tasks.map((t) => ({
         task: { title: t.title, at: t.at },
         session: { id: t.session, harness: t.harness },
         project: t.project,
       }));
+      const fingerprint = evidenceFingerprint(evidence);
+      const decision = regeneration(fingerprint, prior);
+      if (decision.action === "keep") continue;
+      const replaced = decision.action === "replace" ? prior.find((p) => p.id === decision.id) : undefined;
       const tasks = workflow.tasks.map((t) => ({
         title: t.title,
         userMessages: this.store.taskMessages(t.harness, t.session, t.position),
@@ -723,11 +732,15 @@ export class App {
           title: skill.title,
           trigger: skill.trigger,
           body: { steps: skill.steps },
-          scope: defaultScope(evidence),
+          scope: replaced?.scopeOverridden ? replaced.scope : defaultScope(evidence),
+          scopeOverridden: replaced?.scopeOverridden,
           evidence,
+          fingerprint,
+          replaces: replaced?.id,
           createdAt: this.deps.clock.now(),
         });
         result.created.push(id);
+        if (replaced) result.replaced.push(replaced.id);
       } catch (error) {
         if (signal?.aborted) break;
         if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);

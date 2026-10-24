@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import type { HarnessId, HarnessMessage, HarnessSession, TokenUsage } from "../adapter.js";
 import type { Intent, SplitTask } from "@sessionlore/analysis";
 import type { ResolvedProject } from "../project.js";
-import type { Evidence, Scope, Suggestion, SuggestionKind, SuggestionState } from "../suggestion.js";
+import type { Evidence, PriorSuggestion, Scope, Suggestion, SuggestionKind, SuggestionState } from "../suggestion.js";
 import { openDatabase, type Database, type SqlValue } from "./database.js";
 import { migrate } from "./migrations.js";
 
@@ -124,8 +124,20 @@ export interface NewSuggestion {
   /** Kind-specific content, e.g. `{ steps }` for a Skill. */
   body: Record<string, unknown>;
   scope: Scope;
+  /** True when `scope` is one the person chose, carried over from the Suggestion this replaces. */
+  scopeOverridden?: boolean;
   evidence: readonly Evidence[];
+  /** Keys of the Tasks (or Corrections) it is derived from; see `suggestionFingerprint`. */
+  fingerprint: readonly string[];
+  /** A Pending Suggestion this one supersedes; it is removed in the same transaction. */
+  replaces?: number;
   createdAt: Date;
+}
+
+function rowScope(row: { scope_kind: string; scope_root: string | null; scope_name: string | null }): Scope {
+  return row.scope_kind === "project" && row.scope_root && row.scope_name
+    ? { kind: "project", project: { name: row.scope_name, path: row.scope_root } }
+    : { kind: "user" };
 }
 
 export interface ClusterCorrection {
@@ -688,13 +700,14 @@ export class Store {
       .map((m) => ({ text: m.text, intent: m.intent as Intent }));
   }
 
-  /** Stores a new Pending Suggestion and returns its id. */
+  /** Stores a new Pending Suggestion, removing the one it `replaces` if any, and returns its id. */
   createSuggestion(input: NewSuggestion): number {
     return this.db.transaction(() => {
       const { scope } = input;
       const id = this.db.run(
-        `INSERT INTO suggestions (kind, state, cluster_id, workflow_name, title, trigger, body, scope_kind, scope_root, scope_name, created_at)
-         VALUES (?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO suggestions (kind, state, cluster_id, workflow_name, title, trigger, body, scope_kind, scope_root, scope_name,
+                                  scope_overridden, fingerprint, created_at)
+         VALUES (?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         input.kind,
         input.workflow.id,
         input.workflow.name,
@@ -704,6 +717,8 @@ export class Store {
         scope.kind,
         scope.kind === "project" ? scope.project.path : null,
         scope.kind === "project" ? scope.project.name : null,
+        input.scopeOverridden ? 1 : 0,
+        JSON.stringify(input.fingerprint),
         input.createdAt.toISOString(),
       ).lastInsertRowid;
       input.evidence.forEach((e, position) => {
@@ -720,20 +735,37 @@ export class Store {
           e.project?.name ?? null,
         );
       });
+      // Removed after the insert, so the new Suggestion never reuses the old one's id.
+      if (input.replaces !== undefined) this.db.run("DELETE FROM suggestions WHERE id = ? AND state = 'Pending'", input.replaces);
       return id;
     });
   }
 
-  /** Ids of the Workflows that already have a Suggestion of `kind`, in any state. */
-  workflowsWithSuggestions(kind: SuggestionKind): Set<number> {
-    return new Set(
-      this.db
-        .all<{ cluster_id: number }>(
-          "SELECT DISTINCT cluster_id FROM suggestions WHERE kind = ? AND cluster_id IS NOT NULL",
-          kind,
-        )
-        .map((r) => r.cluster_id),
-    );
+  /** Every Suggestion of `kind` as `suggest` weighs it against a Workflow, newest first. */
+  priorSuggestions(kind: SuggestionKind): (PriorSuggestion & { scope: Scope; scopeOverridden: boolean })[] {
+    return this.db
+      .all<{
+        id: number;
+        state: string;
+        fingerprint: string;
+        edited_at: string | null;
+        scope_kind: string;
+        scope_root: string | null;
+        scope_name: string | null;
+        scope_overridden: number;
+      }>(
+        `SELECT id, state, fingerprint, edited_at, scope_kind, scope_root, scope_name, scope_overridden
+           FROM suggestions WHERE kind = ? ORDER BY id DESC`,
+        kind,
+      )
+      .map((r) => ({
+        id: r.id,
+        state: r.state as SuggestionState,
+        fingerprint: JSON.parse(r.fingerprint) as string[],
+        edited: r.edited_at !== null,
+        scope: rowScope(r),
+        scopeOverridden: r.scope_overridden === 1,
+      }));
   }
 
   /** Suggestions, oldest first, optionally only those in `state`. */
@@ -831,10 +863,7 @@ export class Store {
             project: e.project_root && e.project_name ? { name: e.project_name, path: e.project_root } : null,
           }),
         );
-      const scope: Scope =
-        row.scope_kind === "project" && row.scope_root && row.scope_name
-          ? { kind: "project", project: { name: row.scope_name, path: row.scope_root } }
-          : { kind: "user" };
+      const scope = rowScope(row);
       const body = JSON.parse(row.body) as { steps?: string[] };
       return {
         id: row.id,
