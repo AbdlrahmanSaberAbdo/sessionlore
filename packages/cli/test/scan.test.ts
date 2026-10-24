@@ -43,6 +43,7 @@ describe("scan of Claude Code Sessions", () => {
           project: { name: "shop", path: repo },
           startedAt: "2026-05-01T09:00:00.000Z",
           endedAt: "2026-05-01T09:03:00.000Z",
+          model: "claude-sonnet-4-5-20250929",
           userMessageCount: 2,
           assistantTurnCount: 2,
           subagentRunCount: 0,

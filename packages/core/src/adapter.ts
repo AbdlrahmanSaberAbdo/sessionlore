@@ -1,7 +1,7 @@
 import type { Env } from "./ports.js";
 
 /** Stable identifier of a Harness, used in the store and in `--json` output. */
-export type HarnessId = "claude-code";
+export type HarnessId = "claude-code" | "cursor";
 
 export interface HarnessContext {
   homeDir: string;
@@ -33,6 +33,20 @@ export interface TokenUsage {
   cacheRead: number;
 }
 
+/**
+ * One message of a Session, in conversation order: something the person typed,
+ * visible assistant text, or a tool call the agent made.
+ */
+export type HarnessMessage = (
+  | { role: "user"; text: string }
+  | { role: "assistant"; text: string }
+  | { role: "tool"; name: string; status: string | null }
+) & {
+  timestamp: Date | null;
+  /** Set on messages from a subagent run inside the Session: the subagent's type, e.g. "explore". */
+  subagent?: string;
+};
+
 /** A Session read into the shape every Adapter produces. */
 export interface HarnessSession {
   externalId: string;
@@ -54,6 +68,10 @@ export interface HarnessSession {
    * a visible warning, so a Harness format change never silently drops data (ADR 0001).
    */
   unrecognized: Record<string, number>;
+  /** The model the Session ran with, if the Harness recorded one. */
+  model?: string | null;
+  /** Every message in conversation order, for Harnesses whose Adapter reads them. */
+  messages?: HarnessMessage[];
 }
 
 /**

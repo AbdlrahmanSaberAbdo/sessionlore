@@ -137,6 +137,20 @@ const commands: Record<string, Command> = {
       }
     },
   },
+  session: {
+    summary: "Show one stored Session with its messages: session <id>",
+    run({ app, json, args, out }) {
+      const [id] = args;
+      if (!id) throw new Error("Which Session? Usage: sessionlore session <id>");
+      const session = app.getSession(id);
+      if (!session) throw new Error(`No stored Session has id ${id}. Run \`sessionlore sessions\` to list them.`);
+      if (json) return out(JSON.stringify({ session }, null, 2) + "\n");
+      out(`${session.harness}  ${session.project?.name ?? "(no Project)"}  ${session.startedAt}  ${session.model ?? ""}\n\n`);
+      for (const m of session.messages) {
+        out(m.role === "tool" ? `  [tool] ${m.name} (${m.status ?? "unknown"})\n` : `${m.role}: ${m.text}\n`);
+      }
+    },
+  },
 };
 
 function plural(count: number, word: string): string {

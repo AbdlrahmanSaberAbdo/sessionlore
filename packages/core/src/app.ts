@@ -12,7 +12,13 @@ import {
   taskSplitPrompt,
   type RepeatRule,
 } from "@sessionlore/analysis";
-import { Store, type ClusterTask, type SessionTasks, type StoredSession } from "./store/store.js";
+import {
+  Store,
+  type ClusterTask,
+  type SessionTasks,
+  type StoredSession,
+  type StoredSessionDetail,
+} from "./store/store.js";
 
 /**
  * The application interface. The CLI and the HTTP server are thin layers over
@@ -113,9 +119,11 @@ export class App {
     const unrecognized = new Map<Adapter, Map<string, number>>();
     const found: { adapter: Adapter; source: SessionSource }[] = [];
     for (const adapter of this.deps.adapters) {
+      const storages = await adapter.discover(this.deps.harnessContext);
+      if (storages.length === 0) continue; // this Harness has no data on this machine
       counts.set(adapter, { added: 0, updated: 0, unchanged: 0 });
       unrecognized.set(adapter, new Map());
-      for (const storage of await adapter.discover(this.deps.harnessContext)) {
+      for (const storage of storages) {
         for await (const source of adapter.listSessions(storage)) found.push({ adapter, source });
       }
     }
@@ -165,6 +173,14 @@ export class App {
     return this.store
       .listSessions()
       .filter((s) => this.projectFilter.allows(s.project && { root: s.project.path, name: s.project.name }));
+  }
+
+  getSession(id: string): StoredSessionDetail | null {
+    const session = this.store.getSession(id);
+    if (!session || !this.projectFilter.allows(session.project && { root: session.project.path, name: session.project.name })) {
+      return null;
+    }
+    return session;
   }
 
   /**
