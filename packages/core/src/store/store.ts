@@ -664,6 +664,41 @@ export class Store {
     return [...clusters.values()];
   }
 
+  /**
+   * One Session's Tasks (with the Cluster each is in) and its User Messages in
+   * order (with their Task's position and Intent, null until analyzed).
+   */
+  sessionAnalysis(
+    harness: HarnessId,
+    sessionId: string,
+  ): {
+    tasks: { position: number; title: string; cluster: number | null }[];
+    userMessages: { text: string; intent: Intent | null; task: number | null }[];
+  } {
+    const tasks = this.db.all<{ position: number; title: string; cluster_id: number | null }>(
+      `SELECT t.position, t.title, t.cluster_id FROM tasks t JOIN sessions s ON s.id = t.session_id
+        WHERE s.harness = ? AND s.external_id = ? ORDER BY t.position`,
+      harness,
+      sessionId,
+    );
+    const userMessages = this.db.all<{ text: string; intent: string | null; task: number | null }>(
+      `SELECT m.text, m.intent, t.position AS task FROM user_messages m
+         JOIN sessions s ON s.id = m.session_id
+         LEFT JOIN tasks t ON t.id = m.task_id
+        WHERE s.harness = ? AND s.external_id = ? ORDER BY m.position`,
+      harness,
+      sessionId,
+    );
+    return {
+      tasks: tasks.map((t) => ({ position: Number(t.position), title: t.title, cluster: t.cluster_id })),
+      userMessages: userMessages.map((m) => ({
+        text: m.text,
+        intent: m.intent as Intent | null,
+        task: m.task === null ? null : Number(m.task),
+      })),
+    };
+  }
+
   /** The User Messages of one Task, identified by its Session and position. */
   taskMessages(harness: HarnessId, sessionId: string, position: number): { text: string; intent: Intent }[] {
     return this.db

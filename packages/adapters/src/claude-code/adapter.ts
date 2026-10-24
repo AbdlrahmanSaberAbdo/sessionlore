@@ -5,6 +5,7 @@ import { createInterface } from "node:readline";
 import type {
   Adapter,
   HarnessContext,
+  HarnessMessage,
   HarnessSession,
   HarnessUserMessage,
   SessionSource,
@@ -22,7 +23,7 @@ import type {
  * Part of every change marker, so Sessions are read again after a sessionlore
  * update changes what this Adapter reads from them. Bump it when that happens.
  */
-const READER_VERSION = "claude-code-reader-2";
+const READER_VERSION = "claude-code-reader-3";
 
 export const claudeCodeAdapter: Adapter = {
   harness: "claude-code",
@@ -75,13 +76,18 @@ export const claudeCodeAdapter: Adapter = {
     }
     if (!startedAt || !endedAt) return null;
 
+    const messages = new Conversation();
     for (const record of tree.activeBranch()) {
       if (record.type === "assistant") main.add(record);
       const timestamp = parseTimestamp(record.timestamp);
       if (record.type === "user" && timestamp) {
         const text = typedUserText(record);
-        if (text !== null) userMessages.push({ text, timestamp });
+        if (text !== null) {
+          userMessages.push({ text, timestamp });
+          messages.addUserMessage(text, timestamp);
+        }
       }
+      messages.add(record, timestamp);
     }
 
     // A subagent's records are all written by agents, never by the person: only its token usage counts.
@@ -105,6 +111,7 @@ export const claudeCodeAdapter: Adapter = {
       subagentRunCount: subagents.length,
       tokens: sumUsage([main.tokens, subagentUsage.tokens]),
       unrecognized,
+      messages: messages.messages,
     };
   },
 };
@@ -191,6 +198,54 @@ class MessageTree {
       current = this.byUuid.get(parent);
     }
     return branch.reverse();
+  }
+}
+
+/**
+ * The messages of the active branch in order: User Messages, visible
+ * assistant text (one message per API message, however many records it was
+ * written as) and tool calls, whose status comes from their tool result.
+ */
+class Conversation {
+  readonly messages: HarnessMessage[] = [];
+  private readonly toolCalls = new Map<string, Extract<HarnessMessage, { role: "tool" }>>();
+  private lastAssistant: { id: unknown; message: Extract<HarnessMessage, { role: "assistant" }> } | null = null;
+
+  addUserMessage(text: string, timestamp: Date): void {
+    this.messages.push({ role: "user", text, timestamp });
+    this.lastAssistant = null;
+  }
+
+  add(record: JsonRecord, timestamp: Date | null): void {
+    const message = record.message as { id?: unknown; model?: unknown; content?: unknown } | undefined;
+    const blocks = Array.isArray(message?.content) ? (message.content as JsonRecord[]) : [];
+    if (record.type === "assistant" && message?.model !== "<synthetic>") {
+      for (const block of blocks) {
+        if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
+          this.addAssistantText(message?.id, block.text, timestamp);
+        } else if (block?.type === "tool_use" && typeof block.name === "string") {
+          const call = { role: "tool" as const, name: block.name, status: null, timestamp };
+          this.messages.push(call);
+          if (typeof block.id === "string") this.toolCalls.set(block.id, call);
+          this.lastAssistant = null;
+        }
+      }
+    } else if (record.type === "user") {
+      for (const block of blocks) {
+        const call = block?.type === "tool_result" && typeof block.tool_use_id === "string" && this.toolCalls.get(block.tool_use_id);
+        if (call) call.status = block.is_error === true ? "error" : "completed";
+      }
+    }
+  }
+
+  private addAssistantText(id: unknown, text: string, timestamp: Date | null): void {
+    if (this.lastAssistant && id !== undefined && this.lastAssistant.id === id) {
+      this.lastAssistant.message.text += `\n\n${text}`;
+      return;
+    }
+    const message = { role: "assistant" as const, text, timestamp };
+    this.messages.push(message);
+    this.lastAssistant = { id, message };
   }
 }
 
