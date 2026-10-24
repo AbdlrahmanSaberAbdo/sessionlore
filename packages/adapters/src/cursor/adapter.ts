@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   openReadOnlyDatabase,
   type Adapter,
@@ -52,7 +53,7 @@ export const cursorAdapter: Adapter = {
   },
 
   async readSession(source: SessionSource, warnings: ScanWarnings): Promise<HarnessSession | null> {
-    return withDatabase(source.location, (db) => readComposer({ db, warnings }, source.externalId));
+    return withDatabase(source.location, (db) => readComposer({ db, database: source.location, warnings }, source.externalId));
   },
 };
 
@@ -73,6 +74,8 @@ interface ThreadEntry {
 
 interface Reader {
   db: ReadOnlyDatabase;
+  /** Path of the `state.vscdb` being read. */
+  database: string;
   warnings: ScanWarnings;
 }
 
@@ -93,7 +96,11 @@ function withDatabase<T>(path: string, fn: (db: ReadOnlyDatabase) => T): T {
 
 function readComposer(reader: Reader, composerId: string): HarnessSession | null {
   const { db } = reader;
-  const head = parseJson(db.get<{ value: SqlBlob }>("SELECT value FROM composerHeaders WHERE composerId = ?", composerId)?.value);
+  const header = db.get<{ workspaceId: string | null; value: SqlBlob }>(
+    "SELECT workspaceId, value FROM composerHeaders WHERE composerId = ?",
+    composerId,
+  );
+  const head = parseJson(header?.value);
   const data = readComposerData(reader, composerId);
   if (!head || !data || head.isDraft === true) return null;
 
@@ -114,7 +121,7 @@ function readComposer(reader: Reader, composerId: string): HarnessSession | null
   const modelConfig = data.modelConfig as Json | undefined;
   return {
     externalId: composerId,
-    cwd: workspaceFolder(head),
+    cwd: workspaceFolder(head) ?? mappedWorkspaceFolder(reader.database, header?.workspaceId ?? null),
     startedAt,
     endedAt,
     model: typeof modelConfig?.modelName === "string" ? modelConfig.modelName : null,
@@ -238,6 +245,23 @@ function readBubbles(reader: Reader, composerId: string, data: Json): Json[] {
 function workspaceFolder(head: Json): string | null {
   const identifier = head.workspaceIdentifier as { uri?: { fsPath?: unknown } } | undefined;
   return typeof identifier?.uri?.fsPath === "string" ? identifier.uri.fsPath : null;
+}
+
+/**
+ * The folder Cursor's workspace mapping gives a workspace id:
+ * `User/workspaceStorage/<workspaceId>/workspace.json`, next to `User/globalStorage`.
+ */
+function mappedWorkspaceFolder(database: string, workspaceId: string | null): string | null {
+  if (!workspaceId) return null;
+  const file = join(dirname(dirname(database)), "workspaceStorage", workspaceId, "workspace.json");
+  if (!existsSync(file)) return null;
+  const mapping = parseJson(readFileSync(file, "utf8"));
+  if (typeof mapping?.folder !== "string" || !mapping.folder.startsWith("file:")) return null;
+  try {
+    return fileURLToPath(mapping.folder);
+  } catch {
+    return null;
+  }
 }
 
 /** What the person typed, without the `<timestamp>`/`<user_query>` wrapper newer Cursor versions add. */

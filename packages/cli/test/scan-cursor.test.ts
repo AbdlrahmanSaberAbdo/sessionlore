@@ -1,6 +1,14 @@
 import { dirname } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bubble, cursorDatabasePath, FixtureHome, holdCursorDatabaseOpen, writeCursorDatabase } from "@sessionlore/fixtures";
+import {
+  bubble,
+  cursorDatabasePath,
+  FixtureHome,
+  holdCursorDatabaseOpen,
+  turn,
+  writeClaudeSession,
+  writeCursorDatabase,
+} from "@sessionlore/fixtures";
 import { snapshotTree } from "./support/files.js";
 import { runCli } from "./support/harness.js";
 
@@ -202,5 +210,37 @@ describe("scan of Cursor Sessions", () => {
     expect(json.harnesses[0].warnings).toEqual([
       { message: expect.stringMatching(/unknown format version 99/), count: 1 },
     ]);
+  });
+
+  it("gives Claude Code and Cursor Sessions in the same git repository one Project", async () => {
+    const repo = home.gitRepo("code/shop");
+    const worktree = home.gitWorktree(repo, "code/shop-worktrees/feature-x");
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("hi")] });
+    writeCursorDatabase(home, [{ folder: worktree, createdAt: "2026-05-02T09:00:00.000Z", bubbles: [bubble.user("hi")] }]);
+
+    await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(sessions.map((s: any) => [s.harness, s.project])).toEqual([
+      ["cursor", { name: "shop", path: repo }],
+      ["claude-code", { name: "shop", path: repo }],
+    ]);
+  });
+
+  it("finds a Session's Project through Cursor's workspace mapping when its header names no folder", async () => {
+    const repo = home.gitRepo("code/my shop");
+    writeCursorDatabase(home, [
+      {
+        folder: repo,
+        workspaceMapping: "workspace-json",
+        createdAt: "2026-05-01T09:00:00.000Z",
+        bubbles: [bubble.user("hi")],
+      },
+    ]);
+
+    await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(sessions[0].project).toEqual({ name: "my shop", path: repo });
   });
 });
