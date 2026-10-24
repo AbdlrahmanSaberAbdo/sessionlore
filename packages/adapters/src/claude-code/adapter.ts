@@ -8,6 +8,7 @@ import type {
   HarnessSession,
   HarnessUserMessage,
   SessionSource,
+  TokenUsage,
 } from "@sessionlore/core";
 
 /**
@@ -47,8 +48,15 @@ export const claudeCodeAdapter: Adapter = {
     let startedAt: Date | null = null;
     let endedAt: Date | null = null;
     const userMessages: HarnessUserMessage[] = [];
+    // Claude Code writes one API message as several records sharing its id, each
+    // repeating the message's usage; keep one usage per id (the last record's).
+    const usageByMessageId = new Map<string, TokenUsage>();
 
     for await (const record of readRecords(source.location)) {
+      if (record.type === "assistant") {
+        const message = assistantMessage(record);
+        if (message) usageByMessageId.set(message.id, message.usage);
+      }
       if (record.type !== "user" && record.type !== "assistant") continue;
       const timestamp = parseTimestamp(record.timestamp);
       if (timestamp) {
@@ -64,9 +72,48 @@ export const claudeCodeAdapter: Adapter = {
     }
 
     if (!startedAt || !endedAt) return null;
-    return { externalId: source.externalId, cwd, startedAt, endedAt, userMessages };
+    return {
+      externalId: source.externalId,
+      cwd,
+      startedAt,
+      endedAt,
+      userMessages,
+      assistantTurnCount: usageByMessageId.size,
+      tokens: sumUsage(usageByMessageId.values()),
+    };
   },
 };
+
+/** The API message an assistant record belongs to, unless it is a Harness-made stub. */
+function assistantMessage(record: JsonRecord): { id: string; usage: TokenUsage } | null {
+  const message = record.message as { id?: unknown; model?: unknown; usage?: unknown } | undefined;
+  if (!message || typeof message.id !== "string" || message.model === "<synthetic>") return null;
+  const usage = (message.usage ?? {}) as Record<string, unknown>;
+  return {
+    id: message.id,
+    usage: {
+      input: tokenCount(usage.input_tokens),
+      output: tokenCount(usage.output_tokens),
+      cacheCreation: tokenCount(usage.cache_creation_input_tokens),
+      cacheRead: tokenCount(usage.cache_read_input_tokens),
+    },
+  };
+}
+
+function tokenCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function sumUsage(usages: Iterable<TokenUsage>): TokenUsage {
+  const total: TokenUsage = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
+  for (const usage of usages) {
+    total.input += usage.input;
+    total.output += usage.output;
+    total.cacheCreation += usage.cacheCreation;
+    total.cacheRead += usage.cacheRead;
+  }
+  return total;
+}
 
 type JsonRecord = Record<string, unknown>;
 

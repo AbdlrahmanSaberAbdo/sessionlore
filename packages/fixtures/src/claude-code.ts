@@ -8,9 +8,24 @@ import type { FixtureHome } from "./home.js";
  * like the ones Claude Code writes.
  */
 
+/** Token usage as Claude Code records it on an assistant message. */
+export interface ClaudeUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+const DEFAULT_USAGE: ClaudeUsage = {
+  input_tokens: 10,
+  output_tokens: 20,
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+};
+
 export type ClaudeTurn =
   | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string }
+  | { kind: "assistant"; blocks: string[]; usage: ClaudeUsage }
   | { kind: "tool"; name: string; input: Record<string, unknown>; result: string }
   | { kind: "meta"; text: string };
 
@@ -19,7 +34,20 @@ export const turn = {
   /** Text the person typed. */
   user: (text: string): ClaudeTurn => ({ kind: "user", text }),
   /** A plain assistant reply. */
-  assistant: (text: string): ClaudeTurn => ({ kind: "assistant", text }),
+  assistant: (text: string, usage: ClaudeUsage = DEFAULT_USAGE): ClaudeTurn => ({
+    kind: "assistant",
+    blocks: [text],
+    usage,
+  }),
+  /**
+   * One assistant API message that Claude Code writes as several records, one
+   * per content block, all sharing the message id and repeating its usage.
+   */
+  splitAssistant: (blocks: string[], usage: ClaudeUsage = DEFAULT_USAGE): ClaudeTurn => ({
+    kind: "assistant",
+    blocks,
+    usage,
+  }),
   /** An assistant tool call and the tool result Claude Code feeds back as a user record. */
   tool: (name: string, input: Record<string, unknown>, result: string): ClaudeTurn => ({
     kind: "tool",
@@ -94,19 +122,24 @@ export function writeClaudeSession(home: FixtureHome, spec: ClaudeSessionSpec): 
     clock += step;
   };
 
-  const assistant = (content: object[]): void => {
-    push({
-      type: "assistant",
-      requestId: `req_${nextId()}`,
-      message: {
-        id: `msg_${nextId()}`,
-        type: "message",
-        role: "assistant",
-        model: MODEL,
-        content,
-        stop_reason: null,
-        usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0 },
-      },
+  /** Writes one API message as one record per content block, as Claude Code does. */
+  const assistant = (blocks: object[], usage: ClaudeUsage = DEFAULT_USAGE): void => {
+    const requestId = `req_${nextId()}`;
+    const messageId = `msg_${nextId()}`;
+    blocks.forEach((block, index) => {
+      push({
+        type: "assistant",
+        requestId,
+        message: {
+          id: messageId,
+          type: "message",
+          role: "assistant",
+          model: MODEL,
+          content: [block],
+          stop_reason: index === blocks.length - 1 ? "end_turn" : null,
+          usage: { ...usage },
+        },
+      });
     });
   };
 
@@ -119,7 +152,10 @@ export function writeClaudeSession(home: FixtureHome, spec: ClaudeSessionSpec): 
         push({ type: "user", isMeta: true, message: { role: "user", content: t.text } });
         break;
       case "assistant":
-        assistant([{ type: "text", text: t.text }]);
+        assistant(
+          t.blocks.map((text) => ({ type: "text", text })),
+          t.usage,
+        );
         break;
       case "tool": {
         const toolUseId = `toolu_${nextId()}`;

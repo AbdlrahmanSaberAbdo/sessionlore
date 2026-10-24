@@ -44,6 +44,8 @@ describe("scan of Claude Code Sessions", () => {
           startedAt: "2026-05-01T09:00:00.000Z",
           endedAt: "2026-05-01T09:03:00.000Z",
           userMessageCount: 2,
+          assistantTurnCount: 2,
+          tokens: { input: 20, output: 40, cacheCreation: 0, cacheRead: 0 },
         },
       ],
     });

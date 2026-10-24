@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { HarnessId, HarnessSession } from "../adapter.js";
+import type { HarnessId, HarnessSession, TokenUsage } from "../adapter.js";
 import type { ResolvedProject } from "../project.js";
 import { openDatabase, type Database } from "./database.js";
 import { migrate } from "./migrations.js";
@@ -21,6 +21,8 @@ export interface StoredSession {
   startedAt: string;
   endedAt: string;
   userMessageCount: number;
+  assistantTurnCount: number;
+  tokens: TokenUsage;
 }
 
 export interface SaveSessionInput {
@@ -70,20 +72,24 @@ export class Store {
         sessionId = existing.id;
         this.db.run(
           `UPDATE sessions SET project_id = ?, cwd = ?, started_at = ?, ended_at = ?,
-             scan_fingerprint = ?, last_scan_id = ? WHERE id = ?`,
+             scan_fingerprint = ?, last_scan_id = ?, assistant_turn_count = ?,
+             input_tokens = ?, output_tokens = ?, cache_creation_tokens = ?, cache_read_tokens = ?
+           WHERE id = ?`,
           projectId,
           session.cwd,
           session.startedAt.toISOString(),
           session.endedAt.toISOString(),
           fingerprint,
           scanId,
+          ...summaryValues(session),
           sessionId,
         );
         this.db.run("DELETE FROM user_messages WHERE session_id = ?", sessionId);
       } else {
         sessionId = this.db.run(
-          `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, scan_fingerprint, last_scan_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, scan_fingerprint, last_scan_id,
+             assistant_turn_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           harness,
           session.externalId,
           projectId,
@@ -92,6 +98,7 @@ export class Store {
           session.endedAt.toISOString(),
           fingerprint,
           scanId,
+          ...summaryValues(session),
         ).lastInsertRowid;
       }
       session.userMessages.forEach((message, position) => {
@@ -117,9 +124,15 @@ export class Store {
       started_at: string;
       ended_at: string;
       user_message_count: number;
+      assistant_turn_count: number;
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_tokens: number;
+      cache_read_tokens: number;
     }>(
       `SELECT s.external_id, s.harness, p.name AS project_name, p.root AS project_root,
-              s.started_at, s.ended_at,
+              s.started_at, s.ended_at, s.assistant_turn_count,
+              s.input_tokens, s.output_tokens, s.cache_creation_tokens, s.cache_read_tokens,
               (SELECT COUNT(*) FROM user_messages m WHERE m.session_id = s.id) AS user_message_count
          FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
         ORDER BY s.started_at DESC, s.id DESC`,
@@ -131,6 +144,13 @@ export class Store {
       startedAt: row.started_at,
       endedAt: row.ended_at,
       userMessageCount: Number(row.user_message_count),
+      assistantTurnCount: Number(row.assistant_turn_count),
+      tokens: {
+        input: Number(row.input_tokens),
+        output: Number(row.output_tokens),
+        cacheCreation: Number(row.cache_creation_tokens),
+        cacheRead: Number(row.cache_read_tokens),
+      },
     }));
   }
 
@@ -140,4 +160,10 @@ export class Store {
     if (!row) throw new Error(`Project ${project.root} was not stored`);
     return row.id;
   }
+}
+
+/** The per-Session summary columns, in the order the session queries list them. */
+function summaryValues(session: HarnessSession): number[] {
+  const { tokens } = session;
+  return [session.assistantTurnCount, tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead];
 }

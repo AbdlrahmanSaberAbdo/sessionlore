@@ -23,6 +23,14 @@ export interface HarnessUserMessage {
   timestamp: Date;
 }
 
+/** Tokens the Session's model calls used, each API message counted once. */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cacheCreation: number;
+  cacheRead: number;
+}
+
 /** A Session read into the shape every Adapter produces. */
 export interface HarnessSession {
   externalId: string;
@@ -32,6 +40,9 @@ export interface HarnessSession {
   endedAt: Date;
   /** Only text the person typed; never agent, subagent or Harness-injected text. */
   userMessages: HarnessUserMessage[];
+  /** Assistant replies in the conversation, one per API message however the Harness splits it. */
+  assistantTurnCount: number;
+  tokens: TokenUsage;
 }
 
 /**

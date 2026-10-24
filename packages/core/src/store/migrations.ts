@@ -50,6 +50,17 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    name: "assistant turns and token usage per session",
+    sql: `
+      ALTER TABLE sessions ADD COLUMN assistant_turn_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

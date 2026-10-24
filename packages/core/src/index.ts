@@ -5,6 +5,7 @@ export type {
   HarnessSession,
   HarnessUserMessage,
   SessionSource,
+  TokenUsage,
 } from "./adapter.js";
 export { App, type AppDependencies, type ScanResult, type HarnessScanResult } from "./app.js";
 export { systemClock, type Clock, type Embedder, type Env, type ModelProvider } from "./ports.js";
