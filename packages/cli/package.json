@@ -17,21 +17,24 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsup"
+    "build": "pnpm --filter @sessionlore/ui build && tsup"
   },
   "devDependencies": {
     "@sessionlore/adapters": "workspace:*",
     "@sessionlore/analysis": "workspace:*",
     "@sessionlore/core": "workspace:*",
     "@sessionlore/fixtures": "workspace:*",
-    "@sessionlore/renderers": "workspace:*"
+    "@sessionlore/renderers": "workspace:*",
+    "@sessionlore/server": "workspace:*"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.87",
     "@ai-sdk/google": "4.0.104",
     "@ai-sdk/openai": "4.0.101",
     "@ai-sdk/openai-compatible": "3.0.77",
+    "@hono/node-server": "2.1.5",
     "ai": "7.0.152",
+    "hono": "4.13.13",
     "ollama-ai-provider-v2": "4.1.0",
     "zod": "4.6.7"
   }

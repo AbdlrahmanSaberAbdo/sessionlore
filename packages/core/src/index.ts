@@ -20,6 +20,8 @@ export {
   type HarnessScanResult,
   type ClusterView,
   type NearWorkflowView,
+  type ClusterRef,
+  type ReclusterResult,
   type WorkflowsResult,
   type SuggestResult,
   type AcceptResult,
@@ -31,6 +33,7 @@ export {
   type NearCorrectionClusterView,
   type CorrectionsResult,
 } from "./app.js";
+export type { CorrectionsOverTime, Overview } from "./overview.js";
 export {
   defaultScope,
   RenderError,
