@@ -64,20 +64,81 @@ export async function writeSkill(
   workflow: WorkflowForSkill,
   signal?: AbortSignal,
 ): Promise<{ skill: SkillDraft; tokens: TokenCount }> {
+  const { output, tokens } = await generate(model, skillSystem, skillPrompt(workflow), skillSchema, signal);
+  const { title, trigger, steps } = output;
+  return { skill: { title: title.trim(), trigger: trigger.trim(), steps: steps.map((s) => s.trim()) }, tokens };
+}
+
+/** One Correction of a Correction Cluster, as the strong model is shown it. */
+export interface ClusterCorrectionForRule {
+  text: string;
+  /** Title of the Task it corrected. */
+  task: string;
+}
+
+export interface CorrectionClusterForRule {
+  name: string;
+  corrections: readonly ClusterCorrectionForRule[];
+}
+
+/** The neutral content of a Rule: what the strong model writes. */
+export interface RuleDraft {
+  title: string;
+  rule: string;
+}
+
+/** Corrections shown to the strong model per Correction Cluster; the most recent ones are used. */
+export const RULE_EVIDENCE_SAMPLE = 12;
+
+const ruleSchema = z.object({
+  title: z.string().min(1).max(80).describe("Short name of the Rule, e.g. 'Use pnpm'"),
+  rule: z
+    .string()
+    .min(1)
+    .max(300)
+    .describe("The standing instruction, one imperative sentence, e.g. 'Use pnpm, never npm, to install packages and run scripts.'"),
+});
+
+const ruleSystem = `You write a Rule for AI coding agents: a one-line standing instruction an agent always follows.
+You are given a Correction Cluster: similar Corrections a person typed to fix what their agents did, each with the Task it corrected.
+Write the one instruction that would have prevented all of them. It must fit every Correction shown, not just one. Do not mention the person or these specific Tasks.
+Text like [REDACTED:api-key] replaced a secret; treat it as an opaque value and never copy it into the Rule.`;
+
+/** The request text sent to write a Rule for a Correction Cluster, with secrets redacted. */
+export function rulePrompt(cluster: CorrectionClusterForRule): string {
+  const corrections = cluster.corrections
+    .slice(-RULE_EVIDENCE_SAMPLE)
+    .map((c) => `<correction task="${escapeAttribute(redact(c.task))}">\n${redact(c.text.slice(0, MESSAGE_CHARS))}\n</correction>`);
+  return `<correction-cluster name="${escapeAttribute(redact(cluster.name))}">\n${corrections.join("\n")}\n</correction-cluster>`;
+}
+
+/** Writes a Rule for a Correction Cluster using `model` (the strong model). */
+export async function writeRule(
+  model: Exclude<LanguageModel, string>,
+  cluster: CorrectionClusterForRule,
+  signal?: AbortSignal,
+): Promise<{ rule: RuleDraft; tokens: TokenCount }> {
+  const { output, tokens } = await generate(model, ruleSystem, rulePrompt(cluster), ruleSchema, signal);
+  return { rule: { title: output.title.trim(), rule: output.rule.replace(/\s+/g, " ").trim() }, tokens };
+}
+
+async function generate<T>(
+  model: Exclude<LanguageModel, string>,
+  system: string,
+  prompt: string,
+  schema: z.ZodType<T>,
+  signal: AbortSignal | undefined,
+): Promise<{ output: T; tokens: TokenCount }> {
   try {
     const result = await generateText({
       model,
-      system: skillSystem,
-      prompt: skillPrompt(workflow),
-      output: Output.object({ schema: skillSchema }),
+      system,
+      prompt,
+      output: Output.object({ schema }),
       temperature: 0,
       abortSignal: signal,
     });
-    const { title, trigger, steps } = result.output;
-    return {
-      skill: { title: title.trim(), trigger: trigger.trim(), steps: steps.map((s) => s.trim()) },
-      tokens: tokenCount(result.usage),
-    };
+    return { output: result.output as T, tokens: tokenCount(result.usage) };
   } catch (error) {
     if (NoObjectGeneratedError.isInstance(error)) {
       throw new MalformedReplyError(

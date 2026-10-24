@@ -31,6 +31,7 @@ export const claudeSkillRenderer: Renderer = {
   harness: "claude-code",
   kind: "skill",
   render(suggestion, { homeDir, readFile }) {
+    if (suggestion.kind !== "skill") throw new RenderError(`The Claude Skill Renderer can't render a ${suggestion.kind}.`);
     const name = claudeSkillName(suggestion);
     const path = join(claudeSkillDir(suggestion.scope, homeDir), name, "SKILL.md");
     if (readFile(path) !== null) {
