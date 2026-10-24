@@ -169,6 +169,38 @@ describe("recluster", () => {
     expect(shown.json().workflow.tasks).toHaveLength(6);
   });
 
+  it("rebuilds Correction Clusters too, keeping the identity of the one each maps to", async () => {
+    session("2026-05-10T09:00:00.000Z", "write a database migration", "no, use pnpm here", "no, not yarn");
+    session("2026-05-20T09:00:00.000Z", "add a database migration", "no, pnpm please", "no, yarn is wrong");
+    session("2026-05-25T09:00:00.000Z", "database migration for carts", "no, run it with pnpm");
+    const modelProvider = scriptedModelProvider((request) => {
+      const messages = [...request.matchAll(/<message index=\\"(\d+)\\">\\n([\s\S]*?)\\n<\/message>/g)];
+      if (messages.length === 0) return { name: request.includes("pnpm") ? "Use pnpm" : "Avoid yarn" };
+      return {
+        tasks: [
+          {
+            title: messages[0]![2],
+            messages: messages.map(([, index], i) => ({ index: Number(index), intent: i === 0 ? "New Task" : "Correction" })),
+          },
+        ],
+      };
+    }).modelProvider;
+    await analyze({ modelProvider, embedder: topicEmbedder(["database migration", "pnpm", "yarn"], "apart"), clock: now });
+    const before = await runCli(home, ["corrections", "--json"]);
+    const pnpm = before.json().correctionClusters.find((c: any) => c.name === "Use pnpm");
+    const yarn = before.json().nearCorrectionClusters.find((c: any) => c.name === "Avoid yarn");
+
+    const report = await recluster({ modelProvider, embedder: topicEmbedder(["database migration", "no, "], "together"), clock: now });
+
+    expect(report.corrections.mapped).toEqual([
+      { from: { id: pnpm.id, name: "Use pnpm" }, to: { id: pnpm.id, name: "Use pnpm" } },
+      { from: { id: yarn.id, name: "Avoid yarn" }, to: { id: pnpm.id, name: "Use pnpm" } },
+    ]);
+    const after = (await runCli(home, ["corrections", "--json"])).json();
+    expect(after.correctionClusters.map((c: any) => [c.id, c.name, c.corrections.length])).toEqual([[pnpm.id, "Use pnpm", 5]]);
+    expect(after.nearCorrectionClusters).toEqual([]);
+  });
+
   it("explains that there is nothing to re-cluster before any Analysis", async () => {
     const result = await runCli(home, ["recluster"], { embedder: apart() });
 

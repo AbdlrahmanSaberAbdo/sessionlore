@@ -200,13 +200,19 @@ const commands: Record<string, Command> = {
     async run({ app, json, signal, out }) {
       const result = await app.recluster({ signal });
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
-      if (result.mapped.length === 0 && result.created.length === 0) {
+      const sections = [
+        ["Clusters", result],
+        ["Correction Clusters", result.corrections],
+      ] as const;
+      if (sections.every(([, s]) => s.mapped.length === 0 && s.created.length === 0)) {
         return out("No Clusters yet. Run `sessionlore analyze` first.\n");
       }
-      for (const { from, to } of result.mapped) {
-        out(from.id === to.id ? `${from.name}: kept\n` : `${from.name} -> ${to.name}\n`);
+      for (const [title, { mapped, created }] of sections) {
+        if (mapped.length === 0 && created.length === 0) continue;
+        out(`${title}:\n`);
+        for (const { from, to } of mapped) out(from.id === to.id ? `  ${from.name}: kept\n` : `  ${from.name} -> ${to.name}\n`);
+        for (const c of created) out(`  New: ${c.name}\n`);
       }
-      for (const c of result.created) out(`New: ${c.name}\n`);
       for (const { model, tokens, costUsd } of result.usage) {
         const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
         out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);

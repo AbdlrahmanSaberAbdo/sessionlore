@@ -143,6 +143,10 @@ export const migrations: readonly Migration[] = [
         old_id  INTEGER PRIMARY KEY,
         new_id  INTEGER NOT NULL REFERENCES clusters(id) ON DELETE CASCADE
       );
+      CREATE TABLE correction_cluster_redirects (
+        old_id  INTEGER PRIMARY KEY,
+        new_id  INTEGER NOT NULL REFERENCES correction_clusters(id) ON DELETE CASCADE
+      );
     `,
   },
 ];

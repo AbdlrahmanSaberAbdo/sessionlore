@@ -22,6 +22,7 @@ import { costUsd, type Prices } from "./pricing.js";
 import {
   Store,
   type ClusterCorrection,
+  type ClusterKind,
   type ClusterTask,
   type SessionTasks,
   type StoredCluster,
@@ -103,12 +104,18 @@ export interface WorkflowsResult {
 }
 
 /** What `recluster` changed: where each old Cluster went, and which Clusters are new. */
-export interface ReclusterResult {
+export interface ReclusterResult extends ReclusterMapping {
+  /** The same for Correction Clusters, which are rebuilt alongside. */
+  corrections: ReclusterMapping;
+  /** Tokens spent naming the new Clusters. */
+  usage: ModelUsage[];
+}
+
+/** Where each old Cluster went in a re-cluster, and which Clusters are new. */
+export interface ReclusterMapping {
   mapped: { from: ClusterRef; to: ClusterRef }[];
   /** New Clusters that took over from no old one. */
   created: ClusterRef[];
-  /** Tokens spent naming the new Clusters. */
-  usage: ModelUsage[];
 }
 
 export interface ClusterRef {
@@ -392,31 +399,57 @@ export class App {
   async recluster(options: { signal?: AbortSignal } = {}): Promise<ReclusterResult> {
     const embedder = this.deps.embedder;
     if (!embedder) throw new Error("Re-clustering needs the local Embedder, which is not available.");
-    const before = new Map(this.store.listClusters().map((c) => [c.id, clusterName(c)]));
+    const workflowNames = () => new Map(this.store.listClusters().map((c) => [c.id, c.name ?? c.tasks[0]!.title]));
+    const correctionNames = () =>
+      new Map(this.store.listCorrectionClusters().map((c) => [c.id, c.name ?? c.corrections[0]!.text]));
+    const workflowsBefore = workflowNames();
+    const correctionsBefore = correctionNames();
     await this.embedTasks(embedder);
-    const tasks = this.store.embeddedTasks(embedder.modelId);
+    await this.embedCorrections(embedder);
+    const workflows = this.regroup("tasks", this.store.embeddedTasks(embedder.modelId));
+    const corrections = this.regroup("corrections", this.store.embeddedCorrections(embedder.modelId));
+
+    const usage = new UsageTally(this.deps.prices);
+    const model = this.deps.modelProvider?.cheap;
+    if (model) {
+      await this.nameClusters(model, usage, options.signal);
+      await this.nameCorrectionClusters(model, usage, options.signal);
+    }
+    return {
+      ...workflows.report(workflowsBefore, workflowNames()),
+      corrections: corrections.report(correctionsBefore, correctionNames()),
+      usage: usage.byModel(),
+    };
+  }
+
+  /**
+   * Groups `members` from scratch and has the new groups take over from the
+   * old Clusters (ADR 0008). `report` then says where each old Cluster went,
+   * given the Cluster names from before and after.
+   */
+  private regroup(kind: ClusterKind, members: readonly { key: number; vector: number[]; cluster: number | null }[]) {
     const groups: number[][] = [];
-    for (const placement of placeTasks([], tasks.map((t) => ({ task: t.key, vector: t.vector })))) {
+    for (const placement of placeTasks([], members.map((m) => ({ task: m.key, vector: m.vector })))) {
       if ("newCluster" in placement) (groups[placement.newCluster] ??= []).push(placement.task);
     }
-    const oldCluster = new Map(tasks.map((t) => [t.key, t.cluster ?? undefined]));
-    const { heirs, targets } = succession(groups, (task: number) => oldCluster.get(task));
+    const oldCluster = new Map(members.map((m) => [m.key, m.cluster ?? undefined]));
+    const { heirs, targets } = succession(groups, (member: number) => oldCluster.get(member));
     const ids = this.store.recluster(
-      groups.map((tasks, i) => ({ heir: heirs[i], tasks })),
+      kind,
+      groups.map((members, i) => ({ heir: heirs[i], members })),
       targets,
       this.deps.clock.now(),
     );
-
-    const usage = new UsageTally(this.deps.prices);
-    if (this.deps.modelProvider) await this.nameClusters(this.deps.modelProvider.cheap, usage, options.signal);
-    const after = new Map(this.store.listClusters().map((c) => [c.id, clusterName(c)]));
-    const ref = (id: number) => ({ id, name: after.get(id)! });
     return {
-      mapped: [...targets]
-        .sort(([a], [b]) => a - b)
-        .map(([old, group]) => ({ from: { id: old, name: before.get(old)! }, to: ref(ids[group]!) })),
-      created: ids.filter((_, i) => heirs[i] === undefined).map(ref),
-      usage: usage.byModel(),
+      report(before: ReadonlyMap<number, string>, after: ReadonlyMap<number, string>): ReclusterMapping {
+        const ref = (id: number) => ({ id, name: after.get(id)! });
+        return {
+          mapped: [...targets]
+            .sort(([a], [b]) => a - b)
+            .map(([old, group]) => ({ from: { id: old, name: before.get(old)! }, to: ref(ids[group]!) })),
+          created: ids.filter((_, i) => heirs[i] === undefined).map(ref),
+        };
+      },
     };
   }
 
@@ -430,6 +463,17 @@ export class App {
     usage: UsageTally,
     signal: AbortSignal | undefined,
   ): Promise<void> {
+    await this.embedCorrections(embedder);
+    const placements = placeTasks(
+      this.store.correctionClusterVectors(embedder.modelId),
+      this.store.unclusteredCorrections(embedder.modelId).map((c) => ({ task: c.key, vector: c.vector })),
+    );
+    this.store.placeCorrections(placements, this.deps.clock.now());
+    await this.nameCorrectionClusters(model, usage, signal);
+  }
+
+  /** Embeds every Correction not yet embedded with `embedder`'s model. */
+  private async embedCorrections(embedder: Embedder): Promise<void> {
     const toEmbed = this.store.correctionsToEmbed(embedder.modelId);
     for (let i = 0; i < toEmbed.length; i += EMBED_BATCH) {
       const batch = toEmbed.slice(i, i + EMBED_BATCH);
@@ -439,12 +483,13 @@ export class App {
         batch.map((c, j) => ({ key: c.key, vector: vectors[j]! })),
       );
     }
-    const placements = placeTasks(
-      this.store.correctionClusterVectors(embedder.modelId),
-      this.store.unclusteredCorrections(embedder.modelId).map((c) => ({ task: c.key, vector: c.vector })),
-    );
-    this.store.placeCorrections(placements, this.deps.clock.now());
+  }
 
+  private async nameCorrectionClusters(
+    model: ModelProvider["cheap"],
+    usage: UsageTally,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
     const showable = Math.min(NEAR_WORKFLOW_MIN_TASKS, this.repeatRule.minMembers);
     for (const cluster of this.store.unnamedCorrectionClusters(showable)) {
       if (signal?.aborted) return;
@@ -527,7 +572,7 @@ export class App {
    * no Cluster has or had that id, or none of its Tasks may be shown.
    */
   getWorkflow(id: number): ClusterView | null {
-    const current = this.store.resolveCluster(id);
+    const current = this.store.resolveCluster("tasks", id);
     const cluster = current === null ? undefined : this.store.listClusters().find((c) => c.id === current);
     return (cluster && this.clusterView(cluster, this.deps.clock.now())?.view) ?? null;
   }
@@ -572,11 +617,6 @@ const EMBED_BATCH = 32;
 
 /** A Cluster that fails the Repeat Rule is a near-Workflow once it has this many Tasks inside the window. */
 const NEAR_WORKFLOW_MIN_TASKS = 2;
-
-/** A Cluster's name, or its first Task's title until the cheap model has named it. */
-function clusterName(cluster: StoredCluster): string {
-  return cluster.name ?? cluster.tasks[0]!.title;
-}
 
 function unrecognizedWarnings(adapter: Adapter, tally: Map<string, number>): string[] {
   if (tally.size === 0) return [];

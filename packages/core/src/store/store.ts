@@ -77,6 +77,19 @@ export interface ClusterTask {
   at: string;
 }
 
+/** Workflows' Clusters of Tasks, or Correction Clusters of Corrections. */
+export type ClusterKind = "tasks" | "corrections";
+
+const clusterTables = {
+  tasks: { clusters: "clusters", members: "tasks", column: "cluster_id", redirects: "cluster_redirects" },
+  corrections: {
+    clusters: "correction_clusters",
+    members: "user_messages",
+    column: "correction_cluster_id",
+    redirects: "correction_cluster_redirects",
+  },
+} as const;
+
 export interface StoredCluster {
   id: number;
   /** Null until the cheap model has named it. */
@@ -475,7 +488,7 @@ export class Store {
         let cluster: number;
         if ("cluster" in placement) cluster = placement.cluster;
         else {
-          cluster = created.get(placement.newCluster) ?? this.newCluster(at);
+          cluster = created.get(placement.newCluster) ?? this.newCluster("tasks", at);
           created.set(placement.newCluster, cluster);
         }
         this.db.run("UPDATE tasks SET cluster_id = ? WHERE id = ?", cluster, placement.task);
@@ -496,54 +509,74 @@ export class Store {
       .map((t) => ({ key: t.id, vector: decodeVector(t.embedding), cluster: t.cluster_id }));
   }
 
+  /** Every Correction with a `modelId` embedding and the Correction Cluster it is in now, oldest Session first. */
+  embeddedCorrections(modelId: string): { key: number; vector: number[]; cluster: number | null }[] {
+    return this.db
+      .all<{ id: number; embedding: Uint8Array; correction_cluster_id: number | null }>(
+        `SELECT m.id, m.embedding, m.correction_cluster_id FROM user_messages m JOIN sessions s ON s.id = m.session_id
+          WHERE m.intent = 'Correction' AND m.embedding IS NOT NULL AND m.embedding_model = ?
+          ORDER BY s.started_at, s.id, m.position`,
+        modelId,
+      )
+      .map((m) => ({ key: m.id, vector: decodeVector(m.embedding), cluster: m.correction_cluster_id }));
+  }
+
   /**
-   * Replaces every Cluster with `groups` (ADR 0008). A group with an `heir`
-   * keeps that Cluster's id and name; the others become new Clusters. Each
-   * old Cluster that is no group's heir is folded into the group it maps to
-   * (`targets`): rows that point at it are re-pointed and its id redirects
-   * there. Tasks in no group are left unclustered. Returns each group's id.
+   * Replaces every Cluster (or Correction Cluster) with `groups` (ADR 0008).
+   * A group with an `heir` keeps that Cluster's id and name; the others become
+   * new Clusters. Each old Cluster that is no group's heir is folded into the
+   * group it maps to (`targets`): rows in other tables that point at it are
+   * re-pointed and its id redirects there. Members in no group are left
+   * unclustered. Returns each group's id.
    */
   recluster(
-    groups: readonly { heir: number | undefined; tasks: readonly number[] }[],
+    kind: ClusterKind,
+    groups: readonly { heir: number | undefined; members: readonly number[] }[],
     targets: ReadonlyMap<number, number>,
     at: Date,
   ): number[] {
+    const { clusters, members, column, redirects } = clusterTables[kind];
     return this.db.transaction(() => {
-      const ids = groups.map((g) => g.heir ?? this.newCluster(at));
-      this.db.run("UPDATE tasks SET cluster_id = NULL");
+      const ids = groups.map((g) => g.heir ?? this.newCluster(kind, at));
+      this.db.run(`UPDATE ${members} SET ${column} = NULL WHERE ${column} IS NOT NULL`);
       groups.forEach((g, i) => {
-        for (const task of g.tasks) this.db.run("UPDATE tasks SET cluster_id = ? WHERE id = ?", ids[i]!, task);
+        for (const member of g.members) this.db.run(`UPDATE ${members} SET ${column} = ? WHERE id = ?`, ids[i]!, member);
       });
       const heirs = new Set(groups.map((g) => g.heir));
       const references = this.db.all<{ tbl: string; col: string }>(
         `SELECT m.name AS tbl, f."from" AS col FROM sqlite_master m, pragma_foreign_key_list(m.name) f
-          WHERE m.type = 'table' AND f."table" = 'clusters' AND m.name NOT IN ('tasks', 'cluster_redirects')`,
+          WHERE m.type = 'table' AND f."table" = ? AND m.name NOT IN (?, ?)`,
+        clusters,
+        members,
+        redirects,
       );
       for (const [old, group] of targets) {
         if (heirs.has(old)) continue;
         const to = ids[group]!;
         for (const { tbl, col } of references) this.db.run(`UPDATE "${tbl}" SET "${col}" = ? WHERE "${col}" = ?`, to, old);
-        this.db.run("UPDATE cluster_redirects SET new_id = ? WHERE new_id = ?", to, old);
-        this.db.run("INSERT OR REPLACE INTO cluster_redirects (old_id, new_id) VALUES (?, ?)", old, to);
+        this.db.run(`UPDATE ${redirects} SET new_id = ? WHERE new_id = ?`, to, old);
+        this.db.run(`INSERT OR REPLACE INTO ${redirects} (old_id, new_id) VALUES (?, ?)`, old, to);
       }
-      this.db.run("DELETE FROM clusters WHERE id NOT IN (SELECT cluster_id FROM tasks WHERE cluster_id IS NOT NULL)");
+      this.db.run(`DELETE FROM ${clusters} WHERE id NOT IN (SELECT ${column} FROM ${members} WHERE ${column} IS NOT NULL)`);
       return ids;
     });
   }
 
-  /** Adds an empty Cluster. Ids are never reused, so an id that once named a Cluster, or redirects, names nothing else. */
-  private newCluster(at: Date): number {
+  /** Adds an empty Cluster, with an id no redirect uses, so a retired id never names a different Cluster. */
+  private newCluster(kind: ClusterKind, at: Date): number {
+    const { clusters, redirects } = clusterTables[kind];
     return this.db.run(
-      `INSERT INTO clusters (id, created_at) VALUES (
-         (SELECT MAX(id) FROM (SELECT MAX(id) AS id FROM clusters UNION ALL SELECT MAX(old_id) FROM cluster_redirects)) + 1, ?)`,
+      `INSERT INTO ${clusters} (id, created_at) VALUES (
+         (SELECT MAX(id) FROM (SELECT MAX(id) AS id FROM ${clusters} UNION ALL SELECT MAX(old_id) FROM ${redirects})) + 1, ?)`,
       at.toISOString(),
     ).lastInsertRowid;
   }
 
   /** The id a Cluster has now: itself, or the Cluster a re-cluster folded it into. Null if neither exists. */
-  resolveCluster(id: number): number | null {
+  resolveCluster(kind: ClusterKind, id: number): number | null {
+    const { clusters, redirects } = clusterTables[kind];
     const row = this.db.get<{ id: number }>(
-      "SELECT id FROM clusters WHERE id = ? UNION ALL SELECT new_id AS id FROM cluster_redirects WHERE old_id = ? LIMIT 1",
+      `SELECT id FROM ${clusters} WHERE id = ? UNION ALL SELECT new_id AS id FROM ${redirects} WHERE old_id = ? LIMIT 1`,
       id,
       id,
     );
@@ -672,9 +705,7 @@ export class Store {
         let cluster: number;
         if ("cluster" in placement) cluster = placement.cluster;
         else {
-          cluster =
-            created.get(placement.newCluster) ??
-            this.db.run("INSERT INTO correction_clusters (created_at) VALUES (?)", at.toISOString()).lastInsertRowid;
+          cluster = created.get(placement.newCluster) ?? this.newCluster("corrections", at);
           created.set(placement.newCluster, cluster);
         }
         this.db.run("UPDATE user_messages SET correction_cluster_id = ? WHERE id = ?", cluster, placement.task);
