@@ -27,6 +27,8 @@ export interface CliEnvironment {
    * confirmation then require `--yes`.
    */
   ask?: (question: string) => Promise<string>;
+  /** Aborted when the person interrupts (Ctrl-C); long commands stop cleanly and keep finished work. */
+  signal?: AbortSignal;
   clock: Clock;
   modelProvider?: ModelProvider;
   embedder?: Embedder;
@@ -41,6 +43,8 @@ interface CommandContext {
   yes: boolean;
   /** Asks the person a question; absent when there is no terminal to ask on. */
   ask?: (question: string) => Promise<string>;
+  /** Aborted when the person interrupts the command (Ctrl-C). */
+  signal?: AbortSignal;
   /** Positional arguments after the command name. */
   args: string[];
   options: { showRedacted?: string };
@@ -63,7 +67,7 @@ interface Command {
 const commands: Record<string, Command> = {
   analyze: {
     summary: "Split new or changed Sessions into Tasks and label each User Message's Intent",
-    async run({ app, json, yes, ask, options, modelProvider, configFile, out, err }) {
+    async run({ app, json, yes, ask, signal, options, modelProvider, configFile, out, err }) {
       if (options.showRedacted !== undefined) {
         const request = app.redactedRequest(options.showRedacted);
         if (request === null) {
@@ -102,8 +106,18 @@ const commands: Record<string, Command> = {
           return;
         }
       }
-      const result = await app.analyze();
-      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      const result = await app.analyze({ signal });
+      const exitCode = result.interrupted ? interruptedExitCode : undefined;
+      if (json) {
+        out(JSON.stringify(result, null, 2) + "\n");
+        return exitCode;
+      }
+      if (result.interrupted) {
+        out(
+          `Interrupted. ${result.remaining} ${plural(result.remaining, "Session")} left; ` +
+            "run `sessionlore analyze` again to pick up where this stopped.\n",
+        );
+      }
       out(`${result.analyzed.length} ${plural(result.analyzed.length, "Session")} analyzed\n`);
       if (result.failed.length > 0) {
         out(`${result.failed.length} ${plural(result.failed.length, "Session")} failed:\n`);
@@ -113,6 +127,7 @@ const commands: Record<string, Command> = {
         const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
         out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
       }
+      return exitCode;
     },
   },
   tasks: {
@@ -156,6 +171,9 @@ const commands: Record<string, Command> = {
     },
   },
 };
+
+/** The conventional exit code for a command stopped by SIGINT. */
+const interruptedExitCode = 130;
 
 function plural(count: number, word: string): string {
   return count === 1 ? word : `${word}s`;
@@ -257,6 +275,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       json: parsed.values.json ?? false,
       yes: parsed.values.yes ?? false,
       ask: io.ask,
+      signal: io.signal,
       args: parsed.positionals.slice(1),
       options: { showRedacted: parsed.values["show-redacted"] },
       modelProvider,

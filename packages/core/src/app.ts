@@ -53,6 +53,15 @@ export interface AnalysisResult {
   failed: { session: string; error: string }[];
   /** Tokens the Model Provider reported, per model. */
   usage: ModelUsage[];
+  /** True when the Analysis was stopped before every Session was processed. */
+  interrupted: boolean;
+  /** Sessions left for the next Analysis because it was interrupted (failed Sessions are not counted). */
+  remaining: number;
+}
+
+export interface AnalyzeOptions {
+  /** Stops the Analysis; Sessions already finished are kept, and the next Analysis picks up the rest. */
+  signal?: AbortSignal;
 }
 
 /** Tokens used (or expected) on one model, and what they cost. */
@@ -189,24 +198,33 @@ export class App {
    * each User Message with the cheap model. A Session that fails is reported
    * and left for the next Analysis; the others still complete.
    */
-  async analyze(): Promise<AnalysisResult> {
+  async analyze(options: AnalyzeOptions = {}): Promise<AnalysisResult> {
+    const { signal } = options;
     const modelProvider = this.requireModelProvider();
     const model = modelProvider.cheap;
     const usage = new UsageTally(this.deps.prices);
     const analyzed: string[] = [];
     const failed: AnalysisResult["failed"] = [];
-    for (const session of this.sessionsToAnalyze()) {
+    const sessions = this.sessionsToAnalyze();
+    let done = 0;
+    for (const session of sessions) {
+      if (signal?.aborted) break;
       try {
-        const { tasks, tokens } = await splitIntoTasks(model, session.userMessages);
+        const { tasks, tokens } = await splitIntoTasks(model, session.userMessages, signal);
         usage.add(model.modelId, tokens);
+        // Each Session is saved on its own, so an interrupted Analysis keeps every Session finished before it.
+        if (signal?.aborted) break;
         this.store.saveAnalysis(session.key, session.fingerprint, tasks);
         analyzed.push(session.id);
       } catch (error) {
+        if (signal?.aborted) break;
         if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
         failed.push({ session: session.id, error: error instanceof Error ? error.message : String(error) });
       }
+      done += 1;
     }
-    return { analyzed, failed, usage: usage.byModel() };
+    const interrupted = done < sessions.length;
+    return { analyzed, failed, usage: usage.byModel(), interrupted, remaining: sessions.length - done };
   }
 
   /** The redacted text Analysis would send for a Session, or null if no Session has that id. */

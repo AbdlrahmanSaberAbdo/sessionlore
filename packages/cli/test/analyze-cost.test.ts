@@ -26,6 +26,53 @@ function writeSessions(...firstMessages: string[]) {
   );
 }
 
+describe("reliable Analysis", () => {
+  it("when the Model Provider fails for one Session, analyzes the others and lists the failure", async () => {
+    const [cart, node, docs] = writeSessions("rename the cart module", "bump the node version", "update the docs");
+    const provider = scriptedModelProvider((request) => {
+      if (request.includes("node version")) throw new Error("503 Service Unavailable");
+      return oneTask;
+    });
+    await runCli(home, ["scan"]);
+
+    const analyze = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
+
+    expect(analyze.exitCode).toBe(0);
+    expect(analyze.stdout).toContain("2 Sessions analyzed");
+    expect(analyze.stdout).toContain("1 Session failed");
+    expect(analyze.stdout).toContain(`${node!.id}: 503 Service Unavailable`);
+    const { sessions } = (await runCli(home, ["tasks", "--json"])).json();
+    expect(sessions.map((s: any) => s.id).sort()).toEqual([cart!.id, docs!.id].sort());
+  });
+
+  it("an interrupted Analysis processes only the remaining Sessions when run again", async () => {
+    writeSessions("rename the cart module", "bump the node version", "update the docs");
+    const interrupt = new AbortController();
+    const provider = scriptedModelProvider((request) => {
+      if (request.includes("node version")) interrupt.abort();
+      return oneTask;
+    });
+    await runCli(home, ["scan"]);
+
+    const first = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider, signal: interrupt.signal });
+
+    expect(first.exitCode).not.toBe(0);
+    expect(first.stdout).toContain("Interrupted");
+    expect(first.stdout).toContain("1 Session analyzed");
+    expect(first.stdout).toMatch(/Used: mock-cheap: 20 input and 40 output tokens/);
+    expect(provider.requests()).toHaveLength(2);
+
+    const second = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
+
+    expect(second.stdout).toContain("2 Sessions analyzed");
+    const resumed = provider.requests().slice(2);
+    expect(resumed).toHaveLength(2);
+    expect(resumed.join("\n")).not.toContain("cart module");
+    expect(resumed.join("\n")).toContain("node version");
+    expect(resumed.join("\n")).toContain("update the docs");
+  });
+});
+
 describe("analyze cost report", () => {
   // The scripted Model Provider reports 10 input and 20 output tokens per request.
   it("reports actual tokens and cost, using the price set in the config", async () => {

@@ -82,6 +82,7 @@ export function estimateTaskSplit(messages: readonly string[]): TokenCount {
 export async function splitIntoTasks(
   model: Exclude<LanguageModel, string>,
   messages: readonly string[],
+  signal?: AbortSignal,
 ): Promise<{ tasks: SplitTask[]; tokens: TokenCount }> {
   if (messages.length === 0) return { tasks: [], tokens: { input: 0, output: 0 } };
   let output: z.infer<typeof replySchema>;
@@ -93,6 +94,7 @@ export async function splitIntoTasks(
       prompt: taskSplitPrompt(messages),
       output: Output.object({ schema: replySchema }),
       temperature: 0,
+      abortSignal: signal,
     });
     output = result.output;
     tokens = tokenCount(result.usage);

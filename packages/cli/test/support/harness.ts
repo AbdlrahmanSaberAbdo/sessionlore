@@ -22,6 +22,8 @@ export interface RunOptions {
    * are answers fails the test.
    */
   answers?: string[];
+  /** Abort it to interrupt the command, as Ctrl-C would. */
+  signal?: AbortSignal;
 }
 
 export interface CliResult {
@@ -65,6 +67,7 @@ export async function runCli(home: FixtureHome, args: string[], options: RunOpti
       stderr += text;
     },
     ask,
+    signal: options.signal,
     clock: options.clock ?? fixedClock("2026-06-01T12:00:00.000Z"),
     modelProvider: options.modelProvider,
     embedder: options.embedder,

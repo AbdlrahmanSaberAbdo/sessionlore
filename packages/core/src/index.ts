@@ -12,6 +12,7 @@ export {
   type AppDependencies,
   type AnalysisEstimate,
   type AnalysisResult,
+  type AnalyzeOptions,
   type ModelUsage,
   type ScanResult,
   type ScanOptions,
