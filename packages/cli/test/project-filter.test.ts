@@ -82,6 +82,27 @@ describe("including only some Projects in the config", () => {
   });
 });
 
+describe("an invalid config file", () => {
+  it.each([
+    ["is not JSON", "{ projects: ", /not valid JSON/],
+    ["has an unknown setting", { projetcs: {} }, /`projetcs` is not a known setting/],
+    ["has a list that is not a list", { projects: { exclude: "secret" } }, /`projects\.exclude` must be a list/],
+    ["has a list entry that is not a string", { projects: { include: ["shop", 3] } }, /`projects\.include\[1\]` must be a non-empty string/],
+    ["has a relative path glob", { projects: { exclude: ["clients/*"] } }, /`projects\.exclude\[0\]` "clients\/\*" is a relative path/],
+  ])("stops the Scan with an error naming the problem when it %s", async (_, config, problem) => {
+    sessionIn(home.gitRepo("code/shop"));
+    const file = writeConfig(home, config);
+
+    const scan = await runCli(home, ["scan"]);
+
+    expect(scan.exitCode).not.toBe(0);
+    expect(scan.stderr).toContain(file);
+    expect(scan.stderr).toMatch(problem);
+    writeConfig(home, {});
+    expect(await listedProjects()).toEqual([]);
+  });
+});
+
 describe("changing the config after a Scan", () => {
   // Each test drops the config again before listing, so it sees what the store holds.
   it("removes Sessions of a newly excluded Project from the store on the next Scan", async () => {
