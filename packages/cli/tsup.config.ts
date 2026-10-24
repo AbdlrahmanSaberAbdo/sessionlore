@@ -10,6 +10,8 @@ export default defineConfig({
   splitting: true,
   clean: true,
   noExternal: [/^@sessionlore\//],
+  // transformers.js ships native binaries and is loaded at runtime; its model is downloaded on first use (ADR 0004).
+  external: ["@huggingface/transformers"],
   // Keep `node:` prefixes: `node:sqlite` exists only under its prefixed name.
   removeNodeProtocol: false,
   banner: { js: "#!/usr/bin/env node" },

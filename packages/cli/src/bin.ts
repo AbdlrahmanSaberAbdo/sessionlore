@@ -18,6 +18,7 @@ process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
 
 const { main } = await import("./main.js");
 const { systemClock } = await import("@sessionlore/core");
+const { localEmbedder } = await import("./local-embedder.js");
 
 process.exitCode = await main(process.argv.slice(2), {
   homeDir: homedir(),
@@ -26,4 +27,5 @@ process.exitCode = await main(process.argv.slice(2), {
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
   clock: systemClock,
+  embedder: localEmbedder({ homeDir: homedir(), notify: (text) => process.stderr.write(text) }),
 });
