@@ -671,6 +671,17 @@ export class Store {
     );
   }
 
+  /** Sets the Scope the person chose for a Suggestion. */
+  overrideScope(id: number, scope: Scope): void {
+    this.db.run(
+      "UPDATE suggestions SET scope_kind = ?, scope_root = ?, scope_name = ?, scope_overridden = 1 WHERE id = ?",
+      scope.kind,
+      scope.kind === "project" ? scope.project.path : null,
+      scope.kind === "project" ? scope.project.name : null,
+      id,
+    );
+  }
+
   markRejected(id: number, at: Date): void {
     this.db.run("UPDATE suggestions SET state = 'Rejected', rejected_at = ? WHERE id = ?", at.toISOString(), id);
   }

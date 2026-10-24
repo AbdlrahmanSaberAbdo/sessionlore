@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { allAdapters } from "@sessionlore/adapters";
 import { allRenderers } from "@sessionlore/renderers";
@@ -15,6 +15,7 @@ import {
   type Env,
   type ModelProvider,
   type Renderer,
+  type Scope,
 } from "@sessionlore/core";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
 import { openInEditor } from "./editor.js";
@@ -222,7 +223,7 @@ const commands: Record<string, Command> = {
       if (json) return out(JSON.stringify({ suggestions }, null, 2) + "\n");
       if (suggestions.length === 0) return out("No Pending Suggestions. Run `sessionlore suggest` to write some.\n");
       for (const s of suggestions) {
-        const scope = s.scope.kind === "project" ? `Project scope (${s.scope.project.name})` : "User scope";
+        const scope = scopeLabel(s.scope);
         out(`#${s.id}  ${s.kind === "skill" ? "Skill" : s.kind}: ${s.title}  [${scope}]\n`);
         out(`  When: ${s.trigger}\n`);
         s.steps.forEach((step, i) => out(`  ${i + 1}. ${step}\n`));
@@ -275,6 +276,19 @@ const commands: Record<string, Command> = {
       }
     },
   },
+  scope: {
+    summary: "Change where a Pending Suggestion installs: scope <id> user | scope <id> project [folder]",
+    run({ app, json, args, out }) {
+      const id = suggestionId(args, "scope");
+      const [, kind, folder] = args;
+      if (kind !== "user" && kind !== "project") {
+        throw new Error("Which Scope? Usage: sessionlore scope <id> user, or sessionlore scope <id> project [folder]");
+      }
+      const suggestion = app.setScope(id, kind === "user" ? { kind } : { kind, folder: folder && resolve(folder) });
+      if (json) return out(JSON.stringify({ suggestion }, null, 2) + "\n");
+      out(`#${suggestion.id} ${suggestion.title} will install in ${scopeLabel(suggestion.scope)}.\n`);
+    },
+  },
   corrections: {
     summary: "List Correction Clusters (similar Corrections across all Tasks) that pass the Repeat Rule, and near ones",
     run({ app, json, out }) {
@@ -325,6 +339,10 @@ const commands: Record<string, Command> = {
     },
   },
 };
+
+function scopeLabel(scope: Scope): string {
+  return scope.kind === "project" ? `Project scope (${scope.project.name})` : "User scope";
+}
 
 function suggestionId(args: string[], command: string): number {
   const [id] = args;

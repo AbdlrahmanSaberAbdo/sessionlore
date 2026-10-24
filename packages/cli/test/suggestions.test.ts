@@ -359,3 +359,64 @@ describe("edit", () => {
     expect((await review())[0]).toMatchObject({ title: migrationSkill.title, steps: migrationSkill.steps });
   });
 });
+
+describe("scope", () => {
+  it("overriding Project scope with User scope makes accept install in the home directory", async () => {
+    const { shop } = workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const result = await runCli(home, ["scope", String(id), "user", "--json"], opts);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.json().suggestion.scope).toEqual({ kind: "user" });
+    expect((await review())[0].scope).toEqual({ kind: "user" });
+    expect((await runCli(home, ["accept", String(id)], opts)).exitCode).toBe(0);
+    expect(existsSync(home.resolve(".claude/skills/write-a-database-migration/SKILL.md"))).toBe(true);
+    expect(existsSync(join(shop, ".claude", "skills"))).toBe(false);
+  });
+
+  it("sets Project scope to the Project of a given folder", async () => {
+    const shop = home.gitRepo("code/shop");
+    const blog = home.gitRepo("code/blog");
+    session(shop, "2026-05-10T09:00:00.000Z", "write a database migration for orders");
+    session(blog, "2026-05-20T09:00:00.000Z", "add a database migration for posts", "database migration for tags");
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const result = await runCli(home, ["scope", String(id), "project", join(blog, "src")], opts);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect((await review())[0].scope).toEqual({ kind: "project", project: { name: "blog", path: blog } });
+    expect((await runCli(home, ["accept", String(id)], opts)).exitCode).toBe(0);
+    expect(existsSync(join(blog, ".claude", "skills", "write-a-database-migration", "SKILL.md"))).toBe(true);
+  });
+
+  it("needs a folder for Project scope when the Evidence spans several Projects", async () => {
+    session(home.gitRepo("code/shop"), "2026-05-10T09:00:00.000Z", "write a database migration for orders");
+    session(home.gitRepo("code/blog"), "2026-05-20T09:00:00.000Z", "add a database migration for posts", "database migration for tags");
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const result = await runCli(home, ["scope", String(id), "project"], opts);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("several Projects");
+  });
+
+  it("won't change the Scope of an Accepted Suggestion", async () => {
+    workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    await runCli(home, ["accept", String(id)], opts);
+
+    const result = await runCli(home, ["scope", String(id), "user"], opts);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("only Pending Suggestions");
+  });
+});

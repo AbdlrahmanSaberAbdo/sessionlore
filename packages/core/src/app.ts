@@ -22,6 +22,7 @@ import { dirname } from "node:path";
 import {
   defaultScope,
   type Evidence,
+  type Scope,
   type RenderContext,
   type RenderedFile,
   type Renderer,
@@ -172,6 +173,9 @@ export interface AcceptResult {
   suggestion: Suggestion;
   files: RenderedFile[];
 }
+
+/** The Scope the person picks for a Suggestion: User scope, or Project scope by a folder inside the Project. */
+export type ScopeChoice = { kind: "user" } | { kind: "project"; folder?: string };
 
 /** A Suggestion's editable content: `title`, `trigger`, and its kind's fields, each text or a list of text. */
 export type SuggestionForm = { title: string; trigger: string } & Record<string, string | string[]>;
@@ -631,6 +635,31 @@ export class App {
   editSuggestion(id: number, form: unknown): Suggestion {
     const { title, trigger, ...body } = validateForm(this.suggestionForm(id), form);
     this.store.editSuggestion(id, { title, trigger, body }, this.deps.clock.now());
+    return this.store.getSuggestion(id)!;
+  }
+
+  /**
+   * Overrides where a Pending Suggestion will be installed. Project scope takes
+   * a folder inside the Project; without one, the single Project its Evidence
+   * comes from.
+   */
+  setScope(id: number, choice: ScopeChoice): Suggestion {
+    const suggestion = this.pendingSuggestion(id, "re-scoped");
+    let scope: Scope;
+    if (choice.kind === "user") scope = { kind: "user" };
+    else if (choice.folder !== undefined) {
+      const project = resolveProject(choice.folder);
+      scope = { kind: "project", project: { name: project.name, path: project.root } };
+    } else {
+      const fromEvidence = defaultScope(suggestion.evidence);
+      if (fromEvidence.kind !== "project") {
+        throw new SuggestionStateError(
+          `Suggestion ${id}'s Evidence comes from several Projects (or none); name a folder in the Project to install it in.`,
+        );
+      }
+      scope = fromEvidence;
+    }
+    this.store.overrideScope(id, scope);
     return this.store.getSuggestion(id)!;
   }
 
