@@ -24,6 +24,10 @@ export interface RunOptions {
   answers?: string[];
   /** Abort it to interrupt the command, as Ctrl-C would. */
   signal?: AbortSignal;
+  /** Called with the URL `serve` would open in the browser. */
+  openBrowser?: (url: string) => void;
+  /** Folder of built UI files `serve` serves. */
+  uiDir?: string;
 }
 
 export interface CliResult {
@@ -71,6 +75,8 @@ export async function runCli(home: FixtureHome, args: string[], options: RunOpti
     clock: options.clock ?? fixedClock("2026-06-01T12:00:00.000Z"),
     modelProvider: options.modelProvider,
     embedder: options.embedder,
+    openBrowser: options.openBrowser,
+    uiDir: options.uiDir,
   });
   return {
     exitCode,

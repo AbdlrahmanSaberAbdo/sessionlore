@@ -11,6 +11,7 @@ import {
   type Env,
   type ModelProvider,
 } from "@sessionlore/core";
+import { createServer, listen } from "@sessionlore/server";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
 import { unsupportedNodeMessage } from "./node-version.js";
 
@@ -34,6 +35,10 @@ export interface CliEnvironment {
   embedder?: Embedder;
   /** Defaults to every Adapter sessionlore ships. */
   adapters?: readonly Adapter[];
+  /** Opens a URL in the person's browser; `serve` only prints the address without it. */
+  openBrowser?: (url: string) => void;
+  /** Folder of the built dashboard UI that `serve` ships. */
+  uiDir?: string;
 }
 
 interface CommandContext {
@@ -54,6 +59,7 @@ interface CommandContext {
   warn(text: string): void;
   /** `--last N`: limit a Scan to the N most recent Sessions. */
   last?: number;
+  serve: { port: number; open: boolean; openBrowser?: (url: string) => void; uiDir?: string };
   out(text: string): void;
   err(text: string): void;
 }
@@ -194,6 +200,16 @@ const commands: Record<string, Command> = {
       }
     },
   },
+  serve: {
+    summary: "Open the dashboard in your browser, served on localhost only",
+    async run({ app, serve, signal, out }) {
+      const server = await listen(createServer({ app, uiDir: serve.uiDir }), { port: serve.port });
+      out(`sessionlore dashboard: ${server.url}\nPress Ctrl-C to stop.\n`);
+      if (serve.open) serve.openBrowser?.(server.url);
+      await stopped(signal);
+      await server.close();
+    },
+  },
   session: {
     summary: "Show one stored Session with its messages: session <id>",
     run({ app, json, args, out }) {
@@ -209,6 +225,18 @@ const commands: Record<string, Command> = {
     },
   },
 };
+
+/** Resolves once the person interrupts (Ctrl-C), at once if they already have. */
+function stopped(signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (!signal) return;
+    if (signal.aborted) return resolve();
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+/** The dashboard's port unless `--port` says otherwise; a free one is picked when it is taken. */
+const DEFAULT_PORT = 4848;
 
 /** The conventional exit code for a command stopped by SIGINT. */
 const interruptedExitCode = 130;
@@ -242,8 +270,40 @@ function usage(): string {
     `Options:\n  --json                     Machine-readable output\n` +
     `  --last N                   scan: read only the N most recent Sessions\n` +
     `  --yes, -y                  analyze: skip the cost estimate confirmation\n` +
-    `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n`
+    `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n` +
+    `  --port N                   serve: port to serve the dashboard on (default ${DEFAULT_PORT})\n` +
+    `  --no-open                  serve: print the dashboard's address without opening the browser\n`
   );
+}
+
+/** What opening the App needs from the CLI's surroundings. */
+export type AppEnvironment = Pick<CliEnvironment, "homeDir" | "env" | "clock" | "modelProvider" | "embedder" | "adapters">;
+
+/**
+ * Opens the App on the person's store and config file, wired the way every
+ * command (and the dashboard server) uses it. Throws on an invalid config.
+ */
+export function openApp(io: AppEnvironment): App {
+  return openConfiguredApp(io).app;
+}
+
+function openConfiguredApp(io: AppEnvironment): { app: App; modelProvider: ModelProviderResolution } {
+  const config = loadConfig(io.homeDir);
+  const modelProvider: ModelProviderResolution = io.modelProvider
+    ? { ok: true, modelProvider: io.modelProvider }
+    : resolveModelProvider(config.modelProvider, io.env, configPath(io.homeDir));
+  const app = App.open({
+    storePath: storePath(io.homeDir),
+    harnessContext: { homeDir: io.homeDir, env: io.env },
+    adapters: io.adapters ?? allAdapters,
+    clock: io.clock,
+    modelProvider: modelProvider.ok ? modelProvider.modelProvider : undefined,
+    embedder: io.embedder,
+    projectFilter: config.projects,
+    repeatRule: config.repeatRule,
+    prices: config.prices,
+  });
+  return { app, modelProvider };
 }
 
 /** Runs the CLI and returns its exit code. */
@@ -265,6 +325,8 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
         help: { type: "boolean", short: "h" },
         "show-redacted": { type: "string" },
         last: { type: "string" },
+        port: { type: "string" },
+        "no-open": { type: "boolean", default: false },
       },
     });
   } catch (error) {
@@ -292,23 +354,20 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     }
   }
 
+  let port = DEFAULT_PORT;
+  if (parsed.values.port !== undefined) {
+    port = /^\d+$/.test(parsed.values.port) ? Number(parsed.values.port) : -1;
+    if (port < 0 || port > 65535) {
+      io.stderr(`--port takes a port number from 0 to 65535, not "${parsed.values.port}"\n\n${usage()}`);
+      return 2;
+    }
+  }
+
   let app: App | undefined;
   try {
-    const config = loadConfig(io.homeDir);
-    const modelProvider: ModelProviderResolution = io.modelProvider
-      ? { ok: true, modelProvider: io.modelProvider }
-      : resolveModelProvider(config.modelProvider, io.env, configPath(io.homeDir));
-    app = App.open({
-      storePath: storePath(io.homeDir),
-      harnessContext: { homeDir: io.homeDir, env: io.env },
-      adapters: io.adapters ?? allAdapters,
-      clock: io.clock,
-      modelProvider: modelProvider.ok ? modelProvider.modelProvider : undefined,
-      embedder: io.embedder,
-      projectFilter: config.projects,
-      repeatRule: config.repeatRule,
-      prices: config.prices,
-    });
+    const opened = openConfiguredApp(io);
+    app = opened.app;
+    const { modelProvider } = opened;
     const exitCode = await command.run({
       app,
       json: parsed.values.json ?? false,
@@ -320,6 +379,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider,
       configFile: configPath(io.homeDir),
       last,
+      serve: { port, open: !parsed.values["no-open"], openBrowser: io.openBrowser, uiDir: io.uiDir },
       out: io.stdout,
       err: io.stderr,
       warn: io.stderr,

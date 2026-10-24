@@ -50,9 +50,15 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: 3.0.77
         version: 3.0.77(zod@4.6.7)
+      '@hono/node-server':
+        specifier: 2.1.5
+        version: 2.1.5(hono@4.13.13)
       ai:
         specifier: 7.0.152
         version: 7.0.152(zod@4.6.7)
+      hono:
+        specifier: 4.13.13
+        version: 4.13.13
       ollama-ai-provider-v2:
         specifier: 4.1.0
         version: 4.1.0(ai@7.0.152(zod@4.6.7))(zod@4.6.7)
@@ -72,6 +78,9 @@ importers:
       '@sessionlore/fixtures':
         specifier: workspace:*
         version: link:../fixtures
+      '@sessionlore/server':
+        specifier: workspace:*
+        version: link:../server
 
   packages/core:
     dependencies:
@@ -83,6 +92,18 @@ importers:
         version: 7.0.152(zod@4.6.7)
 
   packages/fixtures: {}
+
+  packages/server:
+    dependencies:
+      '@hono/node-server':
+        specifier: 2.1.5
+        version: 2.1.5(hono@4.13.13)
+      '@sessionlore/core':
+        specifier: workspace:*
+        version: link:../core
+      hono:
+        specifier: 4.13.13
+        version: 4.13.13
 
 packages:
 
@@ -438,6 +459,12 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@hono/node-server@2.1.5':
+    resolution: {integrity: sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      hono: ^4 || ^5.0.0-0
+
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
 
@@ -751,6 +778,10 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  hono@4.13.13:
+    resolution: {integrity: sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA==}
+    engines: {node: '>=16.9.0'}
 
   joycon@3.1.1:
     resolution: {integrity: sha512-34wB/Y7MW7bzjKRjUKTa46I2Z7eV62Rkhva+KkopW7Qvv/OSWBqvkSY7vusOPrNuZcUG3tApvdVgNB8POj3SPw==}
@@ -1238,6 +1269,10 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
+  '@hono/node-server@2.1.5(hono@4.13.13)':
+    dependencies:
+      hono: 4.13.13
+
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
@@ -1517,6 +1552,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  hono@4.13.13: {}
 
   joycon@3.1.1: {}
 

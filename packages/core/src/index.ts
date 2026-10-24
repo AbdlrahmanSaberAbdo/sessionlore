@@ -22,6 +22,7 @@ export {
   type NearWorkflowView,
   type WorkflowsResult,
 } from "./app.js";
+export type { CorrectionsOverTime, Overview } from "./overview.js";
 export { systemClock, type Clock, type Embedder, type Env, type ModelProvider, type ModelProviderModel } from "./ports.js";
 export { resolveProject, type ResolvedProject } from "./project.js";
 export { openReadOnlyDatabase, type ReadOnlyDatabase } from "./store/database.js";
