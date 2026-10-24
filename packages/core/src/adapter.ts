@@ -16,6 +16,8 @@ export interface SessionSource {
   location: string;
   /** Changes whenever the Session's stored content changes; lets Scan skip unchanged Sessions. */
   changeMarker: string;
+  /** When the Session was last written to, as far as storage tells without reading it. Orders `scan --last N`. */
+  lastActivityAt: Date;
 }
 
 export interface HarnessUserMessage {

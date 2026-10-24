@@ -120,6 +120,30 @@ describe("scan of Claude Code Sessions: the tricky cases", () => {
   });
 });
 
+describe("scan --last N", () => {
+  it("stores only the N most recent Sessions", async () => {
+    const repo = home.gitRepo("code/shop");
+    const days = ["01", "02", "03", "04", "05", "06", "07"];
+    // Written out of date order, so recency can't come from the order files are found in.
+    for (const day of ["04", "01", "07", "02", "06", "03", "05"]) {
+      writeClaudeSession(home, { cwd: repo, startedAt: `2026-05-${day}T09:00:00.000Z`, turns: [turn.user(day)] });
+    }
+
+    const sessions = await scanAndList(["--last", "5"]);
+
+    expect(sessions.map((s) => s.startedAt)).toEqual(
+      days.slice(2).reverse().map((day) => `2026-05-${day}T09:00:00.000Z`),
+    );
+  });
+
+  it("rejects a count that is not a positive whole number", async () => {
+    const result = await runCli(home, ["scan", "--last", "five"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--last");
+  });
+});
+
 describe("incremental scan", () => {
   it("only re-reads Sessions that changed since the last Scan", async () => {
     const repo = home.gitRepo("code/shop");

@@ -47,6 +47,7 @@ export const claudeCodeAdapter: Adapter = {
           externalId: basename(entry.name, ".jsonl"),
           location,
           changeMarker: [READER_VERSION, ...infos.map((info) => `${info.size}:${info.mtimeMs}`)].join(","),
+          lastActivityAt: new Date(Math.max(...infos.map((info) => info.mtimeMs))),
         };
       }
     }

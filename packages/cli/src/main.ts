@@ -20,6 +20,8 @@ export interface CliEnvironment {
 interface CommandContext {
   app: App;
   json: boolean;
+  /** `--last N`: limit a Scan to the N most recent Sessions. */
+  last?: number;
   out(text: string): void;
 }
 
@@ -31,8 +33,8 @@ interface Command {
 const commands: Record<string, Command> = {
   scan: {
     summary: "Read Sessions from every Harness on this machine into the local store",
-    async run({ app, json, out }) {
-      const result = await app.scan();
+    async run({ app, json, last, out }) {
+      const result = await app.scan({ last });
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       for (const harness of result.harnesses) {
         out(
@@ -61,7 +63,10 @@ function plural(count: number, word: string): string {
 
 function usage(): string {
   const lines = Object.entries(commands).map(([name, c]) => `  ${name.padEnd(10)} ${c.summary}`);
-  return `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n`;
+  return (
+    `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\n` +
+    `Options:\n  --json       Machine-readable output\n  --last N     scan: read only the N most recent Sessions\n`
+  );
 }
 
 /** Runs the CLI and returns its exit code. */
@@ -77,7 +82,11 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     parsed = parseArgs({
       args: [...argv],
       allowPositionals: true,
-      options: { json: { type: "boolean", default: false }, help: { type: "boolean", short: "h" } },
+      options: {
+        json: { type: "boolean", default: false },
+        help: { type: "boolean", short: "h" },
+        last: { type: "string" },
+      },
     });
   } catch (error) {
     io.stderr(`${(error as Error).message}\n\n${usage()}`);
@@ -95,6 +104,15 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     return 2;
   }
 
+  let last: number | undefined;
+  if (parsed.values.last !== undefined) {
+    last = /^\d+$/.test(parsed.values.last) ? Number(parsed.values.last) : 0;
+    if (last < 1) {
+      io.stderr(`--last takes a positive whole number of Sessions, not "${parsed.values.last}"\n\n${usage()}`);
+      return 2;
+    }
+  }
+
   let app: App | undefined;
   try {
     app = App.open({
@@ -105,7 +123,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider: io.modelProvider,
       embedder: io.embedder,
     });
-    await command.run({ app, json: parsed.values.json ?? false, out: io.stdout });
+    await command.run({ app, json: parsed.values.json ?? false, last, out: io.stdout });
     return 0;
   } catch (error) {
     io.stderr(`sessionlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);

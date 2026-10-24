@@ -1,4 +1,4 @@
-import type { Adapter, HarnessContext, HarnessId } from "./adapter.js";
+import type { Adapter, HarnessContext, HarnessId, SessionSource } from "./adapter.js";
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { resolveProject } from "./project.js";
 import { Store, type StoredSession } from "./store/store.js";
@@ -29,6 +29,11 @@ export interface HarnessScanResult {
   unchanged: number;
 }
 
+export interface ScanOptions {
+  /** Read only the N Sessions with the most recent activity, across all Harnesses. */
+  last?: number;
+}
+
 export interface ScanResult {
   harnesses: HarnessScanResult[];
 }
@@ -48,35 +53,51 @@ export class App {
   }
 
   /** Reads every Harness's storage into the store. Never writes to Harness storage. */
-  async scan(): Promise<ScanResult> {
+  async scan(options: ScanOptions = {}): Promise<ScanResult> {
     const scanId = this.store.startScan(this.deps.clock.now());
-    const harnesses: HarnessScanResult[] = [];
+    const counts = new Map<Adapter, { added: number; updated: number; unchanged: number }>();
+    const found: { adapter: Adapter; source: SessionSource }[] = [];
     for (const adapter of this.deps.adapters) {
-      const counts = { added: 0, updated: 0, unchanged: 0 };
+      counts.set(adapter, { added: 0, updated: 0, unchanged: 0 });
       for (const storage of await adapter.discover(this.deps.harnessContext)) {
-        for await (const source of adapter.listSessions(storage)) {
-          if (this.store.sessionFingerprint(adapter.harness, source.externalId) === source.changeMarker) {
-            counts.unchanged += 1;
-            continue;
-          }
-          const session = await adapter.readSession(source);
-          if (!session) continue;
-          const project = session.cwd ? resolveProject(session.cwd) : null;
-          const result = this.store.saveSession({
-            harness: adapter.harness,
-            session,
-            project,
-            fingerprint: source.changeMarker,
-            scanId,
-          });
-          if (result.added) counts.added += 1;
-          else counts.updated += 1;
-        }
+        for await (const source of adapter.listSessions(storage)) found.push({ adapter, source });
       }
-      harnesses.push({ harness: adapter.harness, name: adapter.displayName, ...counts });
     }
+    const selected =
+      options.last === undefined
+        ? found
+        : found
+            .sort((a, b) => b.source.lastActivityAt.getTime() - a.source.lastActivityAt.getTime())
+            .slice(0, options.last);
+
+    for (const { adapter, source } of selected) {
+      const count = counts.get(adapter)!;
+      if (this.store.sessionFingerprint(adapter.harness, source.externalId) === source.changeMarker) {
+        count.unchanged += 1;
+        continue;
+      }
+      const session = await adapter.readSession(source);
+      if (!session) continue;
+      const project = session.cwd ? resolveProject(session.cwd) : null;
+      const result = this.store.saveSession({
+        harness: adapter.harness,
+        session,
+        project,
+        fingerprint: source.changeMarker,
+        scanId,
+      });
+      if (result.added) count.added += 1;
+      else count.updated += 1;
+    }
+
     this.store.finishScan(scanId, this.deps.clock.now());
-    return { harnesses };
+    return {
+      harnesses: [...counts].map(([adapter, count]) => ({
+        harness: adapter.harness,
+        name: adapter.displayName,
+        ...count,
+      })),
+    };
   }
 
   listSessions(): StoredSession[] {
