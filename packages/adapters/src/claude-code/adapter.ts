@@ -6,6 +6,7 @@ import type {
   Adapter,
   HarnessContext,
   HarnessSession,
+  HarnessSkillUse,
   HarnessUserMessage,
   SessionSource,
   TokenUsage,
@@ -22,7 +23,7 @@ import type {
  * Part of every change marker, so Sessions are read again after a sessionlore
  * update changes what this Adapter reads from them. Bump it when that happens.
  */
-const READER_VERSION = "claude-code-reader-2";
+const READER_VERSION = "claude-code-reader-3";
 
 export const claudeCodeAdapter: Adapter = {
   harness: "claude-code",
@@ -60,6 +61,7 @@ export const claudeCodeAdapter: Adapter = {
     const userMessages: HarnessUserMessage[] = [];
     const main = new AssistantMessages();
     const tree = new MessageTree();
+    const skills = new SkillUses();
     const unrecognized: Record<string, number> = {};
 
     for await (const record of readRecords(source.location)) {
@@ -76,6 +78,7 @@ export const claudeCodeAdapter: Adapter = {
     if (!startedAt || !endedAt) return null;
 
     for (const record of tree.activeBranch()) {
+      skills.add(record);
       if (record.type === "assistant") main.add(record);
       const timestamp = parseTimestamp(record.timestamp);
       if (record.type === "user" && timestamp) {
@@ -90,6 +93,7 @@ export const claudeCodeAdapter: Adapter = {
     for (const file of subagents) {
       for await (const record of readRecords(file)) {
         countUnrecognized(record, unrecognized);
+        skills.add(record);
         if (record.type === "assistant") subagentUsage.add(record);
       }
     }
@@ -105,6 +109,7 @@ export const claudeCodeAdapter: Adapter = {
       subagentRunCount: subagents.length,
       tokens: sumUsage([main.tokens, subagentUsage.tokens]),
       unrecognized,
+      skillUses: skills.uses,
     };
   },
 };
@@ -254,6 +259,41 @@ class AssistantMessages {
 
   get tokens(): TokenUsage {
     return sumUsage(this.usageById.values());
+  }
+}
+
+const SKILL_BASE_DIR = "Base directory for this skill: ";
+
+/**
+ * Skills the agent loaded. A Skill tool call names the Skill; the skill body
+ * Claude Code injects right after it names the folder it was loaded from. A
+ * body without a tool call before it is a Skill the person ran as a slash command.
+ */
+class SkillUses {
+  readonly uses: HarnessSkillUse[] = [];
+  /** The latest Skill tool call still waiting for its body. */
+  private pending: HarnessSkillUse | null = null;
+
+  add(record: JsonRecord): void {
+    const timestamp = parseTimestamp(record.timestamp);
+    if (!timestamp) return;
+    const content = (record.message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content as { type?: unknown; name?: unknown; input?: unknown; text?: unknown }[]) {
+      if (record.type === "assistant" && block?.type === "tool_use" && block.name === "Skill") {
+        const name = (block.input as { skill?: unknown } | undefined)?.skill;
+        if (typeof name !== "string" || !name) continue;
+        this.pending = { name, baseDir: null, timestamp };
+        this.uses.push(this.pending);
+      }
+      if (record.type === "user" && record.isMeta === true && block?.type === "text" && typeof block.text === "string") {
+        if (!block.text.startsWith(SKILL_BASE_DIR)) continue;
+        const baseDir = block.text.slice(SKILL_BASE_DIR.length).split("\n", 1)[0]!.trim();
+        if (this.pending) this.pending.baseDir = baseDir;
+        else this.uses.push({ name: basename(baseDir), baseDir, timestamp });
+        this.pending = null;
+      }
+    }
   }
 }
 
