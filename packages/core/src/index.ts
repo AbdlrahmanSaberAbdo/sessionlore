@@ -30,6 +30,7 @@ export {
   type NearCorrectionClusterView,
   type CorrectionsResult,
 } from "./app.js";
+export type { CorrectionsOverTime, Overview } from "./overview.js";
 export {
   defaultScope,
   RenderError,

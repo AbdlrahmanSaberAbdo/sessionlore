@@ -21,6 +21,8 @@ const { systemClock } = await import("@sessionlore/core");
 const { localEmbedder } = await import("./local-embedder.js");
 
 const { createInterface } = await import("node:readline/promises");
+const { fileURLToPath } = await import("node:url");
+const { openBrowser } = await import("./open-browser.js");
 
 // The first Ctrl-C asks the command to stop cleanly, keeping finished work; a second one quits at once.
 const interrupt = new AbortController();
@@ -53,4 +55,7 @@ process.exitCode = await main(process.argv.slice(2), {
   signal: interrupt.signal,
   clock: systemClock,
   embedder: localEmbedder({ homeDir: homedir(), notify: (text) => process.stderr.write(text) }),
+  openBrowser,
+  // The build copies the dashboard UI next to bin.js.
+  uiDir: fileURLToPath(new URL("./ui/", import.meta.url)),
 });

@@ -93,6 +93,13 @@ const clusterTables = {
   },
 } as const;
 
+export interface AnalyzedUserMessage {
+  /** When the person sent it. */
+  at: string;
+  intent: Intent;
+  project: { name: string; path: string } | null;
+}
+
 export interface StoredCluster {
   id: number;
   /** Null until the cheap model has named it. */
@@ -945,6 +952,24 @@ export class Store {
       });
     }
     return [...clusters.values()];
+  }
+
+  /** Every User Message of an analyzed Session, with its Intent and when it was sent, oldest first. */
+  analyzedUserMessages(): AnalyzedUserMessage[] {
+    return this.db
+      .all<{ at: string; intent: string; project_name: string | null; project_root: string | null }>(
+        `SELECT m.timestamp AS at, m.intent, p.name AS project_name, p.root AS project_root
+           FROM user_messages m
+           JOIN sessions s ON s.id = m.session_id
+           LEFT JOIN projects p ON p.id = s.project_id
+          WHERE m.task_id IS NOT NULL AND m.intent IS NOT NULL
+          ORDER BY m.timestamp, m.id`,
+      )
+      .map((m) => ({
+        at: m.at,
+        intent: m.intent as Intent,
+        project: m.project_root && m.project_name ? { name: m.project_name, path: m.project_root } : null,
+      }));
   }
 
   private userMessageTexts(sessionKey: number): string[] {

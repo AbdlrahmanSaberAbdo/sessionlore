@@ -19,6 +19,7 @@ import {
   type RepeatRuleResult,
   type TokenCount,
 } from "@sessionlore/analysis";
+import { correctionsPerWeek, TOP_WORKFLOWS, type Overview } from "./overview.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
@@ -596,6 +597,28 @@ export class App {
     result.workflows.sort(busiestFirst);
     result.nearWorkflows.sort(busiestFirst);
     return result;
+  }
+
+  /** Sessions, Tasks and Workflows at a glance, with Corrections over time. */
+  overview(): Overview {
+    const workflows = this.listWorkflows().workflows;
+    const messages = this.store
+      .analyzedUserMessages()
+      .filter((m) => this.projectFilter.allows(m.project && { root: m.project.path, name: m.project.name }));
+    return {
+      counts: {
+        sessions: this.listSessions().length,
+        tasks: this.listTasks().reduce((sum, s) => sum + s.tasks.length, 0),
+        workflows: workflows.length,
+      },
+      topWorkflows: workflows
+        .slice(0, TOP_WORKFLOWS)
+        .map((w) => ({ id: w.id, name: w.name, tasks: w.counted.tasks, sessions: w.counted.sessions })),
+      corrections: correctionsPerWeek(
+        messages.map((m) => ({ at: m.at, correction: m.intent === "Correction" })),
+        this.deps.clock.now(),
+      ),
+    };
   }
 
   /**
