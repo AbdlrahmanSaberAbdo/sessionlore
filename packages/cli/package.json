@@ -24,6 +24,7 @@
     "@sessionlore/analysis": "workspace:*",
     "@sessionlore/core": "workspace:*",
     "@sessionlore/fixtures": "workspace:*",
+    "@sessionlore/renderers": "workspace:*",
     "@sessionlore/server": "workspace:*"
   },
   "dependencies": {

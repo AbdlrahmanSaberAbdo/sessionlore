@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import type { HarnessId, HarnessMessage, HarnessSession, TokenUsage } from "../adapter.js";
 import type { Intent, SplitTask } from "@sessionlore/analysis";
 import type { ResolvedProject } from "../project.js";
+import type { Evidence, Scope, Suggestion, SuggestionKind, SuggestionState } from "../suggestion.js";
 import { openDatabase, type Database, type SqlValue } from "./database.js";
 import { migrate } from "./migrations.js";
 
@@ -71,6 +72,8 @@ export interface ClusterTask {
   title: string;
   /** Id of the Session the Task belongs to. */
   session: string;
+  /** The Task's place among its Session's Tasks, from 0. */
+  position: number;
   harness: HarnessId;
   project: { name: string; path: string } | null;
   /** When the Task started: its first User Message's timestamp. */
@@ -89,6 +92,38 @@ export interface StoredCluster {
   /** Null until the cheap model has named it. */
   name: string | null;
   tasks: ClusterTask[];
+}
+
+/** A Suggestion as written, before it has an id or a state. */
+export interface NewSuggestion {
+  kind: SuggestionKind;
+  workflow: { id: number; name: string };
+  title: string;
+  trigger: string;
+  /** Kind-specific content, e.g. `{ steps }` for a Skill. */
+  body: Record<string, unknown>;
+  scope: Scope;
+  evidence: readonly Evidence[];
+  createdAt: Date;
+}
+
+export interface ClusterCorrection {
+  text: string;
+  /** Title of the Task the Correction belongs to. */
+  task: string;
+  /** Id of the Session the Correction belongs to. */
+  session: string;
+  harness: HarnessId;
+  project: { name: string; path: string } | null;
+  /** The Correction's timestamp. */
+  at: string;
+}
+
+export interface StoredCorrectionCluster {
+  id: number;
+  /** Null until the cheap model has named it. */
+  name: string | null;
+  corrections: ClusterCorrection[];
 }
 
 export interface SaveSessionInput {
@@ -341,7 +376,10 @@ export class Store {
   /** Replaces a Session's Tasks with the result of analyzing the content identified by `fingerprint`. */
   saveAnalysis(sessionKey: number, fingerprint: string, tasks: readonly SplitTask[]): void {
     this.db.transaction(() => {
-      this.db.run("UPDATE user_messages SET task_id = NULL, intent = NULL WHERE session_id = ?", sessionKey);
+      this.db.run(
+        "UPDATE user_messages SET task_id = NULL, intent = NULL, correction_cluster_id = NULL WHERE session_id = ?",
+        sessionKey,
+      );
       this.db.run("DELETE FROM tasks WHERE session_id = ?", sessionKey);
       tasks.forEach((task, position) => {
         const taskId = this.db.run(
@@ -519,6 +557,299 @@ export class Store {
       clusters.set(row.cluster_id, cluster);
       cluster.tasks.push({
         title: row.title,
+        session: row.session_id,
+        position: row.position,
+        harness: row.harness as HarnessId,
+        project: row.project_root && row.project_name ? { name: row.project_name, path: row.project_root } : null,
+        at: row.at,
+      });
+    }
+    return [...clusters.values()];
+  }
+
+  /** The User Messages of one Task, identified by its Session and position. */
+  taskMessages(harness: HarnessId, sessionId: string, position: number): { text: string; intent: Intent }[] {
+    return this.db
+      .all<{ text: string; intent: string }>(
+        `SELECT m.text, m.intent FROM user_messages m
+           JOIN tasks t ON t.id = m.task_id
+           JOIN sessions s ON s.id = t.session_id
+          WHERE s.harness = ? AND s.external_id = ? AND t.position = ?
+          ORDER BY m.position`,
+        harness,
+        sessionId,
+        position,
+      )
+      .map((m) => ({ text: m.text, intent: m.intent as Intent }));
+  }
+
+  /** Stores a new Pending Suggestion and returns its id. */
+  createSuggestion(input: NewSuggestion): number {
+    return this.db.transaction(() => {
+      const { scope } = input;
+      const id = this.db.run(
+        `INSERT INTO suggestions (kind, state, cluster_id, workflow_name, title, trigger, body, scope_kind, scope_root, scope_name, created_at)
+         VALUES (?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        input.kind,
+        input.workflow.id,
+        input.workflow.name,
+        input.title,
+        input.trigger,
+        JSON.stringify(input.body),
+        scope.kind,
+        scope.kind === "project" ? scope.project.path : null,
+        scope.kind === "project" ? scope.project.name : null,
+        input.createdAt.toISOString(),
+      ).lastInsertRowid;
+      input.evidence.forEach((e, position) => {
+        this.db.run(
+          `INSERT INTO suggestion_evidence (suggestion_id, position, task_title, task_at, session_id, harness, project_root, project_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          id,
+          position,
+          e.task.title,
+          e.task.at,
+          e.session.id,
+          e.session.harness,
+          e.project?.path ?? null,
+          e.project?.name ?? null,
+        );
+      });
+      return id;
+    });
+  }
+
+  /** Ids of the Workflows that already have a Suggestion of `kind`, in any state. */
+  workflowsWithSuggestions(kind: SuggestionKind): Set<number> {
+    return new Set(
+      this.db
+        .all<{ cluster_id: number }>(
+          "SELECT DISTINCT cluster_id FROM suggestions WHERE kind = ? AND cluster_id IS NOT NULL",
+          kind,
+        )
+        .map((r) => r.cluster_id),
+    );
+  }
+
+  /** Suggestions, oldest first, optionally only those in `state`. */
+  listSuggestions(state?: SuggestionState): Suggestion[] {
+    return state === undefined ? this.querySuggestions("") : this.querySuggestions("WHERE g.state = ?", state);
+  }
+
+  getSuggestion(id: number): Suggestion | null {
+    return this.querySuggestions("WHERE g.id = ?", id)[0] ?? null;
+  }
+
+  markAccepted(id: number, at: Date, installedFiles: readonly string[]): void {
+    this.db.run(
+      "UPDATE suggestions SET state = 'Accepted', accepted_at = ?, installed_files = ? WHERE id = ?",
+      at.toISOString(),
+      JSON.stringify(installedFiles),
+      id,
+    );
+  }
+
+  markRejected(id: number, at: Date): void {
+    this.db.run("UPDATE suggestions SET state = 'Rejected', rejected_at = ? WHERE id = ?", at.toISOString(), id);
+  }
+
+  private querySuggestions(where: string, ...params: SqlValue[]): Suggestion[] {
+    const rows = this.db.all<{
+      id: number;
+      kind: string;
+      state: string;
+      cluster_id: number | null;
+      cluster_name: string | null;
+      workflow_name: string | null;
+      title: string;
+      trigger: string;
+      body: string;
+      scope_kind: string;
+      scope_root: string | null;
+      scope_name: string | null;
+      created_at: string;
+      accepted_at: string | null;
+      rejected_at: string | null;
+      installed_files: string;
+    }>(
+      `SELECT g.*, c.name AS cluster_name FROM suggestions g LEFT JOIN clusters c ON c.id = g.cluster_id
+        ${where}
+        ORDER BY g.id`,
+      ...params,
+    );
+    return rows.map((row): Suggestion => {
+      const evidence = this.db
+        .all<{
+          task_title: string;
+          task_at: string;
+          session_id: string;
+          harness: string;
+          project_root: string | null;
+          project_name: string | null;
+        }>("SELECT * FROM suggestion_evidence WHERE suggestion_id = ? ORDER BY position", row.id)
+        .map(
+          (e): Evidence => ({
+            task: { title: e.task_title, at: e.task_at },
+            session: { id: e.session_id, harness: e.harness as HarnessId },
+            project: e.project_root && e.project_name ? { name: e.project_name, path: e.project_root } : null,
+          }),
+        );
+      const scope: Scope =
+        row.scope_kind === "project" && row.scope_root && row.scope_name
+          ? { kind: "project", project: { name: row.scope_name, path: row.scope_root } }
+          : { kind: "user" };
+      const body = JSON.parse(row.body) as { steps?: string[] };
+      return {
+        id: row.id,
+        kind: row.kind as SuggestionKind,
+        state: row.state as SuggestionState,
+        title: row.title,
+        trigger: row.trigger,
+        steps: body.steps ?? [],
+        evidence,
+        scope,
+        workflow:
+          row.cluster_id === null ? null : { id: row.cluster_id, name: row.cluster_name ?? row.workflow_name ?? row.title },
+        createdAt: row.created_at,
+        acceptedAt: row.accepted_at,
+        rejectedAt: row.rejected_at,
+        installedFiles: JSON.parse(row.installed_files) as string[],
+      };
+    });
+  }
+
+  /** Corrections with no embedding from `modelId` yet, with their text. */
+  correctionsToEmbed(modelId: string): { key: number; text: string }[] {
+    return this.db
+      .all<{ id: number; text: string }>(
+        `SELECT m.id, m.text FROM user_messages m JOIN sessions s ON s.id = m.session_id
+          WHERE m.intent = 'Correction' AND (m.embedding IS NULL OR m.embedding_model IS NOT ?)
+          ORDER BY s.started_at, s.id, m.position`,
+        modelId,
+      )
+      .map((m) => ({ key: m.id, text: m.text }));
+  }
+
+  saveCorrectionEmbeddings(modelId: string, embeddings: readonly { key: number; vector: readonly number[] }[]): void {
+    this.db.transaction(() => {
+      for (const { key, vector } of embeddings) {
+        this.db.run(
+          "UPDATE user_messages SET embedding = ?, embedding_model = ? WHERE id = ?",
+          new Uint8Array(Float32Array.from(vector).buffer),
+          modelId,
+          key,
+        );
+      }
+    });
+  }
+
+  /** Every Correction Cluster with the `modelId` embeddings of its Corrections. */
+  correctionClusterVectors(modelId: string): { id: number; vectors: number[][] }[] {
+    const byCluster = new Map<number, number[][]>();
+    for (const row of this.db.all<{ cluster_id: number; embedding: Uint8Array | null; embedding_model: string | null }>(
+      `SELECT c.id AS cluster_id, m.embedding, m.embedding_model
+         FROM correction_clusters c
+         LEFT JOIN user_messages m ON m.correction_cluster_id = c.id AND m.intent = 'Correction'
+        ORDER BY c.id, m.id`,
+    )) {
+      const vectors = byCluster.get(row.cluster_id) ?? [];
+      byCluster.set(row.cluster_id, vectors);
+      if (row.embedding && row.embedding_model === modelId) vectors.push(decodeVector(row.embedding));
+    }
+    return [...byCluster].map(([id, vectors]) => ({ id, vectors }));
+  }
+
+  /** Embedded Corrections that belong to no Correction Cluster yet, oldest Session first. */
+  unclusteredCorrections(modelId: string): { key: number; vector: number[] }[] {
+    return this.db
+      .all<{ id: number; embedding: Uint8Array }>(
+        `SELECT m.id, m.embedding FROM user_messages m JOIN sessions s ON s.id = m.session_id
+          WHERE m.intent = 'Correction' AND m.correction_cluster_id IS NULL
+            AND m.embedding IS NOT NULL AND m.embedding_model = ?
+          ORDER BY s.started_at, s.id, m.position`,
+        modelId,
+      )
+      .map((m) => ({ key: m.id, vector: decodeVector(m.embedding) }));
+  }
+
+  /** Puts Corrections into existing Correction Clusters or new ones, then drops Correction Clusters left empty. */
+  placeCorrections(
+    placements: readonly ({ task: number } & ({ cluster: number } | { newCluster: number }))[],
+    at: Date,
+  ): void {
+    this.db.transaction(() => {
+      const created = new Map<number, number>();
+      for (const placement of placements) {
+        let cluster: number;
+        if ("cluster" in placement) cluster = placement.cluster;
+        else {
+          cluster =
+            created.get(placement.newCluster) ??
+            this.db.run("INSERT INTO correction_clusters (created_at) VALUES (?)", at.toISOString()).lastInsertRowid;
+          created.set(placement.newCluster, cluster);
+        }
+        this.db.run("UPDATE user_messages SET correction_cluster_id = ? WHERE id = ?", cluster, placement.task);
+      }
+      this.db.run(
+        `DELETE FROM correction_clusters WHERE id NOT IN
+           (SELECT correction_cluster_id FROM user_messages WHERE correction_cluster_id IS NOT NULL AND intent = 'Correction')`,
+      );
+    });
+  }
+
+  /** Correction Clusters not named yet that have at least `minCorrections` Corrections, with their text. */
+  unnamedCorrectionClusters(minCorrections: number): { id: number; corrections: string[] }[] {
+    return this.db
+      .all<{ id: number }>(
+        `SELECT c.id FROM correction_clusters c
+          WHERE c.name IS NULL
+            AND (SELECT COUNT(*) FROM user_messages m WHERE m.correction_cluster_id = c.id AND m.intent = 'Correction') >= ?
+          ORDER BY c.id`,
+        minCorrections,
+      )
+      .map((c) => ({
+        id: c.id,
+        corrections: this.db
+          .all<{ text: string }>(
+            "SELECT text FROM user_messages WHERE correction_cluster_id = ? AND intent = 'Correction' ORDER BY id",
+            c.id,
+          )
+          .map((m) => m.text),
+      }));
+  }
+
+  nameCorrectionCluster(id: number, name: string): void {
+    this.db.run("UPDATE correction_clusters SET name = ? WHERE id = ?", name, id);
+  }
+
+  /** Every Correction Cluster with its Corrections, oldest first. */
+  listCorrectionClusters(): StoredCorrectionCluster[] {
+    const clusters = new Map<number, StoredCorrectionCluster>();
+    for (const row of this.db.all<{
+      cluster_id: number;
+      name: string | null;
+      text: string;
+      task: string;
+      session_id: string;
+      harness: string;
+      project_name: string | null;
+      project_root: string | null;
+      at: string;
+    }>(
+      `SELECT c.id AS cluster_id, c.name, m.text, t.title AS task, s.external_id AS session_id, s.harness,
+              p.name AS project_name, p.root AS project_root, m.timestamp AS at
+         FROM correction_clusters c
+         JOIN user_messages m ON m.correction_cluster_id = c.id AND m.intent = 'Correction'
+         JOIN tasks t ON t.id = m.task_id
+         JOIN sessions s ON s.id = m.session_id
+         LEFT JOIN projects p ON p.id = s.project_id
+        ORDER BY c.id, m.timestamp, s.id, m.position`,
+    )) {
+      const cluster = clusters.get(row.cluster_id) ?? { id: row.cluster_id, name: row.name, corrections: [] };
+      clusters.set(row.cluster_id, cluster);
+      cluster.corrections.push({
+        text: row.text,
+        task: row.task,
         session: row.session_id,
         harness: row.harness as HarnessId,
         project: row.project_root && row.project_name ? { name: row.project_name, path: row.project_root } : null,

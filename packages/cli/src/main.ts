@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { allAdapters } from "@sessionlore/adapters";
+import { allRenderers } from "@sessionlore/renderers";
 import {
   App,
   configPath,
@@ -10,6 +11,7 @@ import {
   type Embedder,
   type Env,
   type ModelProvider,
+  type Renderer,
 } from "@sessionlore/core";
 import { createServer, listen } from "@sessionlore/server";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
@@ -39,6 +41,8 @@ export interface CliEnvironment {
   openBrowser?: (url: string) => void;
   /** Folder of the built dashboard UI that `serve` ships. */
   uiDir?: string;
+  /** Defaults to every Renderer sessionlore ships. */
+  renderers?: readonly Renderer[];
 }
 
 interface CommandContext {
@@ -189,6 +193,83 @@ const commands: Record<string, Command> = {
       }
     },
   },
+  suggest: {
+    summary: "Write a Skill Suggestion with the strong model for each Workflow that has none",
+    async run({ app, json, signal, modelProvider, out, err }) {
+      if (!modelProvider.ok) {
+        err(modelProvider.problem);
+        return 1;
+      }
+      const result = await app.suggest({ signal });
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      out(`${result.created.length} ${plural(result.created.length, "Suggestion")} written\n`);
+      for (const f of result.failed) out(`  Workflow ${f.workflow} failed: ${f.error}\n`);
+      for (const { model, tokens, costUsd } of result.usage) {
+        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
+        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+      }
+      if (result.created.length > 0) out("Run `sessionlore review` to see them.\n");
+    },
+  },
+  review: {
+    summary: "List Pending Suggestions with their Evidence",
+    run({ app, json, out }) {
+      const suggestions = app.listSuggestions("Pending");
+      if (json) return out(JSON.stringify({ suggestions }, null, 2) + "\n");
+      if (suggestions.length === 0) return out("No Pending Suggestions. Run `sessionlore suggest` to write some.\n");
+      for (const s of suggestions) {
+        const scope = s.scope.kind === "project" ? `Project scope (${s.scope.project.name})` : "User scope";
+        out(`#${s.id}  ${s.kind === "skill" ? "Skill" : s.kind}: ${s.title}  [${scope}]\n`);
+        out(`  When: ${s.trigger}\n`);
+        s.steps.forEach((step, i) => out(`  ${i + 1}. ${step}\n`));
+        out(`  Evidence:\n`);
+        for (const e of s.evidence) out(`    ${e.task.at.slice(0, 10)}  ${e.task.title}  (Session ${e.session.id})\n`);
+        out("\n");
+      }
+      out("Accept with `sessionlore accept <id>`, or reject with `sessionlore reject <id>`.\n");
+    },
+  },
+  accept: {
+    summary: "Install a Pending Suggestion where its Scope says: accept <id>",
+    run({ app, json, args, out }) {
+      const result = app.acceptSuggestion(suggestionId(args, "accept"));
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      out(`Accepted #${result.suggestion.id} ${result.suggestion.title}. Wrote:\n`);
+      for (const file of result.files) out(`  ${file.path}\n`);
+    },
+  },
+  reject: {
+    summary: "Reject a Pending Suggestion so it isn't proposed again: reject <id>",
+    run({ app, json, args, out }) {
+      const suggestion = app.rejectSuggestion(suggestionId(args, "reject"));
+      if (json) return out(JSON.stringify({ suggestion }, null, 2) + "\n");
+      out(`Rejected #${suggestion.id} ${suggestion.title}.\n`);
+    },
+  },
+  corrections: {
+    summary: "List Correction Clusters (similar Corrections across all Tasks) that pass the Repeat Rule, and near ones",
+    run({ app, json, out }) {
+      const result = app.listCorrections();
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      const { minMembers, minSessions, windowDays } = result.repeatRule;
+      out(`Repeat Rule: ${minMembers} Corrections across ${minSessions} Sessions within ${windowDays} days\n`);
+      if (result.correctionClusters.length === 0 && result.nearCorrectionClusters.length === 0) {
+        return out("No Correction Clusters yet. Run `sessionlore analyze` after a few more Sessions.\n");
+      }
+      for (const c of result.correctionClusters) {
+        out(`\n${c.name}  (${c.counted.corrections} Corrections in ${c.counted.sessions} Sessions)\n`);
+        for (const m of c.corrections) out(`  ${m.at.slice(0, 10)}  ${m.harness}  ${m.session}  ${m.text}\n`);
+      }
+      if (result.nearCorrectionClusters.length > 0) out("\nNear Correction Clusters:\n");
+      for (const c of result.nearCorrectionClusters) {
+        const needs = [
+          c.needs.corrections > 0 ? `${c.needs.corrections} more ${plural(c.needs.corrections, "Correction")}` : "",
+          c.needs.sessions > 0 ? `${c.needs.sessions} more ${plural(c.needs.sessions, "Session")}` : "",
+        ].filter(Boolean);
+        out(`  ${c.name}  (needs ${needs.join(" and ")})\n`);
+      }
+    },
+  },
   sessions: {
     summary: "List stored Sessions",
     run({ app, json, out }) {
@@ -238,6 +319,14 @@ function stopped(signal: AbortSignal | undefined): Promise<void> {
 /** The dashboard's port unless `--port` says otherwise; a free one is picked when it is taken. */
 const DEFAULT_PORT = 4848;
 
+function suggestionId(args: string[], command: string): number {
+  const [id] = args;
+  if (!id || !/^\d+$/.test(id)) {
+    throw new Error(`Which Suggestion? Usage: sessionlore ${command} <id>. Run \`sessionlore review\` to list them.`);
+  }
+  return Number(id);
+}
+
 /** The conventional exit code for a command stopped by SIGINT. */
 const interruptedExitCode = 130;
 
@@ -277,7 +366,7 @@ function usage(): string {
 }
 
 /** What opening the App needs from the CLI's surroundings. */
-export type AppEnvironment = Pick<CliEnvironment, "homeDir" | "env" | "clock" | "modelProvider" | "embedder" | "adapters">;
+export type AppEnvironment = Pick<CliEnvironment, "homeDir" | "env" | "clock" | "modelProvider" | "embedder" | "adapters" | "renderers">;
 
 /**
  * Opens the App on the person's store and config file, wired the way every
@@ -302,6 +391,7 @@ function openConfiguredApp(io: AppEnvironment): { app: App; modelProvider: Model
     projectFilter: config.projects,
     repeatRule: config.repeatRule,
     prices: config.prices,
+    renderers: io.renderers ?? allRenderers,
   });
   return { app, modelProvider };
 }

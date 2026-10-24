@@ -117,6 +117,64 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX tasks_cluster ON tasks (cluster_id);
     `,
   },
+  {
+    version: 6,
+    name: "correction embeddings and correction clusters",
+    sql: `
+      CREATE TABLE correction_clusters (
+        id          INTEGER PRIMARY KEY,
+        -- Null until the cheap model has named it.
+        name        TEXT,
+        created_at  TEXT NOT NULL
+      );
+
+      ALTER TABLE user_messages ADD COLUMN embedding BLOB;
+      ALTER TABLE user_messages ADD COLUMN embedding_model TEXT;
+      ALTER TABLE user_messages ADD COLUMN correction_cluster_id INTEGER REFERENCES correction_clusters(id) ON DELETE SET NULL;
+      CREATE INDEX user_messages_correction_cluster ON user_messages (correction_cluster_id);
+    `,
+  },
+  {
+    version: 7,
+    name: "suggestions and their evidence",
+    sql: `
+      -- Suggestions in the format-neutral form (ADR 0005).
+      CREATE TABLE suggestions (
+        id             INTEGER PRIMARY KEY,
+        kind           TEXT NOT NULL,
+        state          TEXT NOT NULL,
+        cluster_id     INTEGER REFERENCES clusters(id) ON DELETE SET NULL,
+        -- The Workflow's name when the Suggestion was written, shown if the Cluster is unnamed.
+        workflow_name  TEXT,
+        title          TEXT NOT NULL,
+        trigger        TEXT NOT NULL,
+        -- Kind-specific content as JSON, e.g. {"steps": [...]} for a Skill.
+        body           TEXT NOT NULL,
+        scope_kind     TEXT NOT NULL,
+        scope_root     TEXT,
+        scope_name     TEXT,
+        created_at     TEXT NOT NULL,
+        accepted_at    TEXT,
+        rejected_at    TEXT,
+        -- JSON array of the files written on accept.
+        installed_files TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE INDEX suggestions_cluster ON suggestions (cluster_id);
+
+      -- Evidence is a snapshot: Tasks are rebuilt when a Session is re-analyzed, so it names them instead of referencing rows.
+      CREATE TABLE suggestion_evidence (
+        suggestion_id  INTEGER NOT NULL REFERENCES suggestions(id) ON DELETE CASCADE,
+        position       INTEGER NOT NULL,
+        task_title     TEXT NOT NULL,
+        task_at        TEXT NOT NULL,
+        session_id     TEXT NOT NULL,
+        harness        TEXT NOT NULL,
+        project_root   TEXT,
+        project_name   TEXT,
+        PRIMARY KEY (suggestion_id, position)
+      );
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

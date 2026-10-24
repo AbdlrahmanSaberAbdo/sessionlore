@@ -78,6 +78,9 @@ importers:
       '@sessionlore/fixtures':
         specifier: workspace:*
         version: link:../fixtures
+      '@sessionlore/renderers':
+        specifier: workspace:*
+        version: link:../renderers
       '@sessionlore/server':
         specifier: workspace:*
         version: link:../server
@@ -92,6 +95,12 @@ importers:
         version: 7.0.152(zod@4.6.7)
 
   packages/fixtures: {}
+
+  packages/renderers:
+    dependencies:
+      '@sessionlore/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/server:
     dependencies:
