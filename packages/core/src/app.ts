@@ -2,7 +2,8 @@ import type { Adapter, HarnessContext, HarnessId, SessionSource } from "./adapte
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { ProjectFilter } from "./project-filter.js";
 import { resolveProject } from "./project.js";
-import { estimateTaskSplit, splitIntoTasks, taskSplitPrompt, type TokenCount } from "@sessionlore/analysis";
+import { estimateTaskSplit, MalformedReplyError, splitIntoTasks, taskSplitPrompt, type TokenCount } from "@sessionlore/analysis";
+import { costUsd, type Prices } from "./pricing.js";
 import { Store, type SessionTasks, type StoredSession } from "./store/store.js";
 
 /**
@@ -20,6 +21,8 @@ export interface AppDependencies {
   embedder?: Embedder;
   /** Which Projects may be stored and shown. Defaults to all of them. */
   projectFilter?: ProjectFilter;
+  /** Model prices from the config, overriding the built-in ones. */
+  prices?: Prices;
 }
 
 export interface HarnessScanResult {
@@ -48,13 +51,39 @@ export interface AnalysisResult {
   /** Ids of the Sessions analyzed. */
   analyzed: string[];
   failed: { session: string; error: string }[];
+  /** Tokens the Model Provider reported, per model. */
+  usage: ModelUsage[];
+}
+
+/** Tokens used (or expected) on one model, and what they cost. */
+export interface ModelUsage {
+  model: string;
+  tokens: TokenCount;
+  /** US dollars; null when the model's price is unknown. */
+  costUsd: number | null;
 }
 
 /** Expected token use per model for the Sessions the next Analysis would process. */
 export interface AnalysisEstimate {
   /** Number of new or changed Sessions. */
   sessions: number;
-  models: { model: string; tokens: TokenCount }[];
+  models: ModelUsage[];
+}
+
+/** Adds up tokens per model and prices them. */
+class UsageTally {
+  private readonly tokens = new Map<string, TokenCount>();
+
+  constructor(private readonly prices: Prices = {}) {}
+
+  add(model: string, tokens: TokenCount): void {
+    const total = this.tokens.get(model) ?? { input: 0, output: 0 };
+    this.tokens.set(model, { input: total.input + tokens.input, output: total.output + tokens.output });
+  }
+
+  byModel(): ModelUsage[] {
+    return [...this.tokens].map(([model, tokens]) => ({ model, tokens, costUsd: costUsd(model, tokens, this.prices) }));
+  }
 }
 
 export class App {
@@ -141,13 +170,9 @@ export class App {
   estimateAnalysis(): AnalysisEstimate {
     const modelProvider = this.requireModelProvider();
     const sessions = this.sessionsToAnalyze();
-    const tokens = { input: 0, output: 0 };
-    for (const session of sessions) {
-      const estimate = estimateTaskSplit(session.userMessages);
-      tokens.input += estimate.input;
-      tokens.output += estimate.output;
-    }
-    return { sessions: sessions.length, models: [{ model: modelProvider.cheap.modelId, tokens }] };
+    const usage = new UsageTally(this.deps.prices);
+    for (const session of sessions) usage.add(modelProvider.cheap.modelId, estimateTaskSplit(session.userMessages));
+    return { sessions: sessions.length, models: usage.byModel() };
   }
 
   private requireModelProvider(): ModelProvider {
@@ -166,17 +191,22 @@ export class App {
    */
   async analyze(): Promise<AnalysisResult> {
     const modelProvider = this.requireModelProvider();
-    const result: AnalysisResult = { analyzed: [], failed: [] };
+    const model = modelProvider.cheap;
+    const usage = new UsageTally(this.deps.prices);
+    const analyzed: string[] = [];
+    const failed: AnalysisResult["failed"] = [];
     for (const session of this.sessionsToAnalyze()) {
       try {
-        const tasks = await splitIntoTasks(modelProvider.cheap, session.userMessages);
+        const { tasks, tokens } = await splitIntoTasks(model, session.userMessages);
+        usage.add(model.modelId, tokens);
         this.store.saveAnalysis(session.key, session.fingerprint, tasks);
-        result.analyzed.push(session.id);
+        analyzed.push(session.id);
       } catch (error) {
-        result.failed.push({ session: session.id, error: error instanceof Error ? error.message : String(error) });
+        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
+        failed.push({ session: session.id, error: error instanceof Error ? error.message : String(error) });
       }
     }
-    return result;
+    return { analyzed, failed, usage: usage.byModel() };
   }
 
   /** The redacted text Analysis would send for a Session, or null if no Session has that id. */

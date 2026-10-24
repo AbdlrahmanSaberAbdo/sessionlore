@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseModelProviderSection, type ModelProviderSettings } from "./model-provider-settings.js";
+import { parsePricesSection, type Prices } from "./pricing.js";
 import { ProjectFilter, parseProjectsSection } from "./project-filter.js";
 import { dataDir } from "./store/store.js";
 
@@ -15,6 +16,8 @@ export interface Config {
   projects: ProjectFilter;
   /** Null when the file has no `modelProvider` section. */
   modelProvider: ModelProviderSettings | null;
+  /** Model prices set by the person, overriding or adding to the built-in ones. */
+  prices: Prices;
 }
 
 /** A config file problem, with a message that names the file and the offending key. */
@@ -34,6 +37,7 @@ type SectionParsers = { [K in keyof Config]: (raw: unknown, ctx: SectionContext)
 const sections: SectionParsers = {
   projects: parseProjectsSection,
   modelProvider: parseModelProviderSection,
+  prices: parsePricesSection,
 };
 
 export function configPath(homeDir: string): string {

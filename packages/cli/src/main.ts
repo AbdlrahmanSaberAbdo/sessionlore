@@ -45,6 +45,8 @@ interface CommandContext {
   args: string[];
   options: { showRedacted?: string };
   modelProvider: ModelProviderResolution;
+  /** Path of the config file, for messages that tell the person what to set. */
+  configFile: string;
   warn(text: string): void;
   /** `--last N`: limit a Scan to the N most recent Sessions. */
   last?: number;
@@ -61,7 +63,7 @@ interface Command {
 const commands: Record<string, Command> = {
   analyze: {
     summary: "Split new or changed Sessions into Tasks and label each User Message's Intent",
-    async run({ app, json, yes, ask, options, modelProvider, out, err }) {
+    async run({ app, json, yes, ask, options, modelProvider, configFile, out, err }) {
       if (options.showRedacted !== undefined) {
         const request = app.redactedRequest(options.showRedacted);
         if (request === null) {
@@ -83,9 +85,12 @@ const commands: Record<string, Command> = {
         return;
       }
       say(`${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze. Estimated use:\n`);
-      for (const { model, tokens } of estimate.models) {
-        say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens\n`);
+      for (const { model, tokens, costUsd } of estimate.models) {
+        const cost = costUsd === null ? "cost unknown" : `about ${dollars(costUsd)}`;
+        say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
       }
+      const unpriced = estimate.models.filter((m) => m.costUsd === null).map((m) => m.model);
+      if (unpriced.length > 0) say(unpricedHint(unpriced, configFile));
       if (!yes) {
         if (!ask) {
           err("Analysis needs confirmation before it calls the Model Provider. Run `sessionlore analyze --yes` to go ahead.\n");
@@ -103,6 +108,10 @@ const commands: Record<string, Command> = {
       if (result.failed.length > 0) {
         out(`${result.failed.length} ${plural(result.failed.length, "Session")} failed:\n`);
         for (const f of result.failed) out(`  ${f.session}: ${f.error}\n`);
+      }
+      for (const { model, tokens, costUsd } of result.usage) {
+        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
+        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
       }
     },
   },
@@ -154,6 +163,15 @@ function plural(count: number, word: string): string {
 
 function count(n: number): string {
   return n.toLocaleString("en-US");
+}
+
+function dollars(usd: number): string {
+  return `$${usd.toFixed(2)}`;
+}
+
+function unpricedHint(models: string[], configFile: string): string {
+  const example = JSON.stringify({ prices: { [models[0]!]: { inputPerMillion: 1, outputPerMillion: 5 } } });
+  return `  sessionlore does not know the price of ${models.join(", ")}. To see costs, add US dollars per million tokens to ${configFile}:\n    ${example}\n`;
 }
 
 function firstLine(text: string): string {
@@ -232,6 +250,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider: modelProvider.ok ? modelProvider.modelProvider : undefined,
       embedder: io.embedder,
       projectFilter: config.projects,
+      prices: config.prices,
     });
     const exitCode = await command.run({
       app,
@@ -241,6 +260,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       args: parsed.positionals.slice(1),
       options: { showRedacted: parsed.values["show-redacted"] },
       modelProvider,
+      configFile: configPath(io.homeDir),
       last,
       out: io.stdout,
       err: io.stderr,

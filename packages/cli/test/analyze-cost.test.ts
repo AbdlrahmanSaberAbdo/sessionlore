@@ -26,6 +26,55 @@ function writeSessions(...firstMessages: string[]) {
   );
 }
 
+describe("analyze cost report", () => {
+  // The scripted Model Provider reports 10 input and 20 output tokens per request.
+  it("reports actual tokens and cost, using the price set in the config", async () => {
+    writeSessions("add a checkout button", "fix the flaky test");
+    writeConfig(home, { prices: { "mock-cheap": { inputPerMillion: 1000, outputPerMillion: 2000 } } });
+    const provider = scriptedModelProvider(() => oneTask);
+    await runCli(home, ["scan"]);
+
+    const analyze = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
+
+    expect(analyze.exitCode).toBe(0);
+    expect(analyze.stdout).toMatch(/mock-cheap: about [\d,]+ input and [\d,]+ output tokens, about \$\d+\.\d\d/);
+    // (20 × $1000 + 40 × $2000) / 1,000,000 = $0.10
+    expect(analyze.stdout).toContain("Used: mock-cheap: 20 input and 40 output tokens, $0.10");
+  });
+
+  it("reports that the cost is unknown for a model with no known price", async () => {
+    writeSessions("add a checkout button");
+    const provider = scriptedModelProvider(() => oneTask);
+    await runCli(home, ["scan"]);
+
+    const analyze = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
+
+    expect(analyze.stdout).toContain("cost unknown");
+    expect(analyze.stdout).toContain("Used: mock-cheap: 10 input and 20 output tokens, cost unknown");
+    expect(analyze.stdout).toContain('"prices"');
+  });
+
+  it("`--json` reports usage and cost per model", async () => {
+    writeSessions("add a checkout button");
+    writeConfig(home, { prices: { "mock-cheap": { inputPerMillion: 1000, outputPerMillion: 2000 } } });
+    const provider = scriptedModelProvider(() => oneTask);
+    await runCli(home, ["scan"]);
+
+    const result = (await runCli(home, ["analyze", "--json", "--yes"], { modelProvider: provider.modelProvider })).json();
+
+    expect(result.usage).toEqual([{ model: "mock-cheap", tokens: { input: 10, output: 20 }, costUsd: 0.05 }]);
+  });
+
+  it("names the problem in an invalid price", async () => {
+    writeConfig(home, { prices: { "mock-cheap": { inputPerMillion: "cheap" } } });
+
+    const sessions = await runCli(home, ["sessions"]);
+
+    expect(sessions.exitCode).not.toBe(0);
+    expect(sessions.stderr).toContain("prices.mock-cheap");
+  });
+});
+
 describe("analyze cost estimate", () => {
   it("shows an estimate and spends nothing when the person declines", async () => {
     writeSessions("add a checkout button", "fix the flaky test");

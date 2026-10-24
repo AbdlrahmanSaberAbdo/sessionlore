@@ -196,7 +196,7 @@ describe("analyze with a malformed reply", () => {
       ],
     };
     const retry = (await runCli(home, ["analyze", "--json", "--yes"], { modelProvider: provider.modelProvider })).json();
-    expect(retry).toEqual({ analyzed: [bad.id], failed: [] });
+    expect(retry).toMatchObject({ analyzed: [bad.id], failed: [] });
     expect(provider.requests()).toHaveLength(4);
   });
 });
