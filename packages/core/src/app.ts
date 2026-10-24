@@ -1,7 +1,8 @@
 import type { Adapter, HarnessContext, HarnessId } from "./adapter.js";
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { resolveProject } from "./project.js";
-import { Store, type StoredSession } from "./store/store.js";
+import { splitIntoTasks } from "@sessionlore/analysis";
+import { Store, type SessionTasks, type StoredSession } from "./store/store.js";
 
 /**
  * The application interface. The CLI and the HTTP server are thin layers over
@@ -26,6 +27,12 @@ export interface HarnessScanResult {
 
 export interface ScanResult {
   harnesses: HarnessScanResult[];
+}
+
+export interface AnalysisResult {
+  /** Ids of the Sessions analyzed. */
+  analyzed: string[];
+  failed: { session: string; error: string }[];
 }
 
 export class App {
@@ -71,5 +78,30 @@ export class App {
 
   listSessions(): StoredSession[] {
     return this.store.listSessions();
+  }
+
+  /**
+   * Splits every new or changed Session into Tasks and labels the Intent of
+   * each User Message with the cheap model. A Session that fails is reported
+   * and left for the next Analysis; the others still complete.
+   */
+  async analyze(): Promise<AnalysisResult> {
+    const modelProvider = this.deps.modelProvider;
+    if (!modelProvider) throw new Error("No Model Provider is configured.");
+    const result: AnalysisResult = { analyzed: [], failed: [] };
+    for (const session of this.store.sessionsToAnalyze()) {
+      try {
+        const tasks = await splitIntoTasks(modelProvider.cheap, session.userMessages);
+        this.store.saveAnalysis(session.key, session.fingerprint, tasks);
+        result.analyzed.push(session.id);
+      } catch (error) {
+        result.failed.push({ session: session.id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return result;
+  }
+
+  listTasks(): SessionTasks[] {
+    return this.store.listTasks();
   }
 }
