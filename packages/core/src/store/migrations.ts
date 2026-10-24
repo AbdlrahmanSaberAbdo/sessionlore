@@ -192,6 +192,18 @@ export const migrations: readonly Migration[] = [
   },
   {
     version: 9,
+    name: "rule suggestions",
+    sql: `
+      -- A Rule's Correction Cluster. cluster_id stays for a Skill's Workflow (a Task Cluster).
+      ALTER TABLE suggestions ADD COLUMN correction_cluster_id INTEGER REFERENCES correction_clusters(id) ON DELETE SET NULL;
+      CREATE INDEX suggestions_correction_cluster ON suggestions (correction_cluster_id);
+      -- Evidence that is a Correction: its text and timestamp, beside its Task.
+      ALTER TABLE suggestion_evidence ADD COLUMN correction_text TEXT;
+      ALTER TABLE suggestion_evidence ADD COLUMN correction_at TEXT;
+    `,
+  },
+  {
+    version: 10,
     name: "skill uses",
     sql: `
       -- Skills the agent loaded in a Session, read by Scan; matched to Accepted Suggestions when shown.

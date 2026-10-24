@@ -230,7 +230,7 @@ const commands: Record<string, Command> = {
     },
   },
   suggest: {
-    summary: "Write a Skill Suggestion with the strong model for each Workflow that has none",
+    summary: "Write Suggestions with the strong model: a Skill for each Workflow and a Rule for each Correction Cluster that has none",
     async run({ app, json, signal, modelProvider, out, err }) {
       if (!modelProvider.ok) {
         err(modelProvider.problem);
@@ -239,7 +239,9 @@ const commands: Record<string, Command> = {
       const result = await app.suggest({ signal });
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       out(`${result.created.length} ${plural(result.created.length, "Suggestion")} written\n`);
-      for (const f of result.failed) out(`  Workflow ${f.workflow} failed: ${f.error}\n`);
+      for (const f of result.failed) {
+        out(`  ${"workflow" in f ? `Workflow ${f.workflow}` : `Correction Cluster ${f.correctionCluster}`} failed: ${f.error}\n`);
+      }
       for (const { model, tokens, costUsd } of result.usage) {
         const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
         out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
@@ -255,11 +257,18 @@ const commands: Record<string, Command> = {
       if (suggestions.length === 0) return out("No Pending Suggestions. Run `sessionlore suggest` to write some.\n");
       for (const s of suggestions) {
         const scope = s.scope.kind === "project" ? `Project scope (${s.scope.project.name})` : "User scope";
-        out(`#${s.id}  ${s.kind === "skill" ? "Skill" : s.kind}: ${s.title}  [${scope}]\n`);
-        out(`  When: ${s.trigger}\n`);
-        s.steps.forEach((step, i) => out(`  ${i + 1}. ${step}\n`));
+        out(`#${s.id}  ${s.kind === "skill" ? "Skill" : "Rule"}: ${s.title}  [${scope}]\n`);
+        if (s.kind === "skill") {
+          out(`  When: ${s.trigger}\n`);
+          s.steps.forEach((step, i) => out(`  ${i + 1}. ${step}\n`));
+        } else {
+          out(`  Rule: ${s.rule}\n`);
+        }
         out(`  Evidence:\n`);
-        for (const e of s.evidence) out(`    ${e.task.at.slice(0, 10)}  ${e.task.title}  (Session ${e.session.id})\n`);
+        for (const e of s.evidence) {
+          const what = e.correction ? `"${e.correction.text}" in ${e.task.title}` : e.task.title;
+          out(`    ${(e.correction?.at ?? e.task.at).slice(0, 10)}  ${what}  (Session ${e.session.id})\n`);
+        }
         out("\n");
       }
       out("Accept with `sessionlore accept <id>`, or reject with `sessionlore reject <id>`.\n");

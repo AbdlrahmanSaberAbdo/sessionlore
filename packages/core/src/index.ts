@@ -46,6 +46,7 @@ export {
   type RenderedFile,
   type Renderer,
   type Scope,
+  type RuleSuggestion,
   type SkillSuggestion,
   type Suggestion,
   type SuggestionKind,
