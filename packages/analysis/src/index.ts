@@ -24,9 +24,15 @@ export {
 } from "./clusters.js";
 export { applyRepeatRule, defaultRepeatRule, type Member, type RepeatRule, type RepeatRuleResult } from "./repeat-rule.js";
 export {
+  RULE_EVIDENCE_SAMPLE,
+  rulePrompt,
   SKILL_EVIDENCE_SAMPLE,
   skillPrompt,
+  writeRule,
   writeSkill,
+  type ClusterCorrectionForRule,
+  type CorrectionClusterForRule,
+  type RuleDraft,
   type SkillDraft,
   type WorkflowForSkill,
   type WorkflowTask,

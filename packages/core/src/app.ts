@@ -14,6 +14,7 @@ import {
   succession,
   taskEmbeddingText,
   taskSplitPrompt,
+  writeRule,
   writeSkill,
   type RepeatRule,
   type RepeatRuleResult,
@@ -202,7 +203,8 @@ export interface ModelUsage {
 export interface SuggestResult {
   /** Ids of the Suggestions written. */
   created: number[];
-  failed: { workflow: number; error: string }[];
+  /** A Skill that failed names its Workflow; a Rule, its Correction Cluster. */
+  failed: ({ workflow: number; error: string } | { correctionCluster: number; error: string })[];
   usage: ModelUsage[];
 }
 
@@ -818,7 +820,7 @@ export class App {
           workflow: { id: workflow.id, name: workflow.name },
           title: skill.title,
           trigger: skill.trigger,
-          body: { steps: skill.steps },
+          steps: skill.steps,
           scope: defaultScope(evidence),
           evidence,
           createdAt: this.deps.clock.now(),
@@ -830,8 +832,52 @@ export class App {
         result.failed.push({ workflow: workflow.id, error: error instanceof Error ? error.message : String(error) });
       }
     }
+    if (!signal?.aborted) await this.suggestRules(model, usage, result, signal);
     result.usage = usage.byModel();
     return result;
+  }
+
+  /** Writes a Rule Suggestion for every qualifying Correction Cluster that has none in any state. */
+  private async suggestRules(
+    model: ModelProvider["strong"],
+    usage: UsageTally,
+    result: SuggestResult,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const suggested = this.store.correctionClustersWithRules();
+    for (const cluster of this.listCorrections().correctionClusters) {
+      if (signal?.aborted) return;
+      if (suggested.has(cluster.id)) continue;
+      const evidence: Evidence[] = cluster.corrections.map((c) => ({
+        correction: { text: c.text, at: c.at },
+        task: { title: c.task, at: c.taskAt },
+        session: { id: c.session, harness: c.harness },
+        project: c.project,
+      }));
+      try {
+        const { rule, tokens } = await writeRule(
+          model,
+          { name: cluster.name, corrections: cluster.corrections.map((c) => ({ text: c.text, task: c.task })) },
+          signal,
+        );
+        usage.add(model.modelId, tokens);
+        if (signal?.aborted) return;
+        const id = this.store.createSuggestion({
+          kind: "rule",
+          correctionCluster: { id: cluster.id, name: cluster.name },
+          title: rule.title,
+          rule: rule.rule,
+          scope: defaultScope(evidence),
+          evidence,
+          createdAt: this.deps.clock.now(),
+        });
+        result.created.push(id);
+      } catch (error) {
+        if (signal?.aborted) return;
+        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
+        result.failed.push({ correctionCluster: cluster.id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
   }
 
   /** Suggestions, oldest first, optionally only those in `state`. */
