@@ -669,7 +669,7 @@ export class App {
       harnesses: distinct(tasks.map((t) => t.harness), (h) => h),
       suggestions: this.store
         .listSuggestions()
-        .filter((s) => s.workflow?.id === view.id)
+        .filter((s) => s.kind === "skill" && s.workflow?.id === view.id)
         .map((s) => ({ id: s.id, state: s.state, title: s.title })),
       filters: filterOptions(this.listSessions()),
     };
@@ -725,7 +725,7 @@ export class App {
   private latestSuggestions(): Map<number, SuggestionRef & { title: string }> {
     const latest = new Map<number, SuggestionRef & { title: string }>();
     for (const s of this.store.listSuggestions()) {
-      if (s.workflow) latest.set(s.workflow.id, { id: s.id, state: s.state, title: s.title });
+      if (s.kind === "skill" && s.workflow) latest.set(s.workflow.id, { id: s.id, state: s.state, title: s.title });
     }
     return latest;
   }
