@@ -16,11 +16,21 @@ export interface SessionSource {
   location: string;
   /** Changes whenever the Session's stored content changes; lets Scan skip unchanged Sessions. */
   changeMarker: string;
+  /** When the Session was last written to, as far as storage tells without reading it. Orders `scan --last N`. */
+  lastActivityAt: Date;
 }
 
 export interface HarnessUserMessage {
   text: string;
   timestamp: Date;
+}
+
+/** Tokens the Session's model calls used, each API message counted once. */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cacheCreation: number;
+  cacheRead: number;
 }
 
 /** A Session read into the shape every Adapter produces. */
@@ -32,6 +42,18 @@ export interface HarnessSession {
   endedAt: Date;
   /** Only text the person typed; never agent, subagent or Harness-injected text. */
   userMessages: HarnessUserMessage[];
+  /** Assistant replies in the conversation, one per API message however the Harness splits it. */
+  assistantTurnCount: number;
+  /** Subagent runs started inside the Session; they belong to it, and their tokens are in `tokens`. */
+  subagentRunCount: number;
+  /** Tokens of the Session and its subagent runs. */
+  tokens: TokenUsage;
+  /**
+   * Records the Adapter did not recognise and skipped, counted by a short
+   * description of their shape (e.g. `record type "foo"`). Scan turns these into
+   * a visible warning, so a Harness format change never silently drops data (ADR 0001).
+   */
+  unrecognized: Record<string, number>;
 }
 
 /**

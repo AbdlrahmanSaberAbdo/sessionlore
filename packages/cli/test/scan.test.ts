@@ -44,6 +44,9 @@ describe("scan of Claude Code Sessions", () => {
           startedAt: "2026-05-01T09:00:00.000Z",
           endedAt: "2026-05-01T09:03:00.000Z",
           userMessageCount: 2,
+          assistantTurnCount: 2,
+          subagentRunCount: 0,
+          tokens: { input: 20, output: 40, cacheCreation: 0, cacheRead: 0 },
         },
       ],
     });
@@ -98,7 +101,9 @@ describe("scan of Claude Code Sessions", () => {
 
     writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-03T09:00:00.000Z", turns: [turn.user("three")] });
     const second = await runCli(home, ["scan", "--json"]);
-    expect(second.json()).toEqual({ harnesses: [{ harness: "claude-code", name: "Claude Code", added: 1 }] });
+    expect(second.json()).toEqual({
+      harnesses: [{ harness: "claude-code", name: "Claude Code", added: 1, updated: 0, unchanged: 2, warnings: [] }],
+    });
   });
 
   it("does not count tool results or Harness-injected text as User Messages", async () => {

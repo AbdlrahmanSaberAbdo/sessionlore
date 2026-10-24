@@ -35,6 +35,9 @@ interface CommandContext {
   args: string[];
   options: { showRedacted?: string };
   modelProvider: ModelProviderResolution;
+  warn(text: string): void;
+  /** `--last N`: limit a Scan to the N most recent Sessions. */
+  last?: number;
   out(text: string): void;
   err(text: string): void;
 }
@@ -87,11 +90,15 @@ const commands: Record<string, Command> = {
   },
   scan: {
     summary: "Read Sessions from every Harness on this machine into the local store",
-    async run({ app, json, out }) {
-      const result = await app.scan();
+    async run({ app, json, last, out, warn }) {
+      const result = await app.scan({ last });
+      for (const warning of result.harnesses.flatMap((h) => h.warnings)) warn(`Warning: ${warning}\n`);
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       for (const harness of result.harnesses) {
-        out(`${harness.name}: ${harness.added} ${plural(harness.added, "Session")} added\n`);
+        out(
+          `${harness.name}: ${harness.added} ${plural(harness.added, "Session")} added, ` +
+            `${harness.updated} updated, ${harness.unchanged} unchanged\n`,
+        );
       }
     },
   },
@@ -119,7 +126,12 @@ function firstLine(text: string): string {
 
 function usage(): string {
   const lines = Object.entries(commands).map(([name, c]) => `  ${name.padEnd(10)} ${c.summary}`);
-  return `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\nOptions:\n  --show-redacted <session>  With analyze: print the redacted text Analysis would send for a Session\n`;
+  return (
+    `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\n` +
+    `Options:\n  --json                     Machine-readable output\n` +
+    `  --last N                   scan: read only the N most recent Sessions\n` +
+    `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n`
+  );
 }
 
 /** Runs the CLI and returns its exit code. */
@@ -139,6 +151,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
         json: { type: "boolean", default: false },
         help: { type: "boolean", short: "h" },
         "show-redacted": { type: "string" },
+        last: { type: "string" },
       },
     });
   } catch (error) {
@@ -155,6 +168,15 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
   if (!command) {
     io.stderr(`Unknown command: ${name}\n\n${usage()}`);
     return 2;
+  }
+
+  let last: number | undefined;
+  if (parsed.values.last !== undefined) {
+    last = /^\d+$/.test(parsed.values.last) ? Number(parsed.values.last) : 0;
+    if (last < 1) {
+      io.stderr(`--last takes a positive whole number of Sessions, not "${parsed.values.last}"\n\n${usage()}`);
+      return 2;
+    }
   }
 
   let app: App | undefined;
@@ -178,8 +200,10 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       args: parsed.positionals.slice(1),
       options: { showRedacted: parsed.values["show-redacted"] },
       modelProvider,
+      last,
       out: io.stdout,
       err: io.stderr,
+      warn: io.stderr,
     });
     return exitCode ?? 0;
   } catch (error) {
