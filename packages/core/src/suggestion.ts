@@ -5,8 +5,8 @@ import type { HarnessId } from "./adapter.js";
  * interface that turns one into a Harness's files when it is Accepted.
  */
 
-/** v1 has Skills; Rules (from Correction Clusters) are added as another kind. */
-export type SuggestionKind = "skill";
+/** Skills come from Workflows, Rules from Correction Clusters. */
+export type SuggestionKind = "skill" | "rule";
 
 export const suggestionStates = ["Pending", "Accepted", "Rejected"] as const;
 export type SuggestionState = (typeof suggestionStates)[number];
@@ -20,12 +20,17 @@ export interface ProjectRef {
 /** Where an Accepted Suggestion is installed. */
 export type Scope = { kind: "project"; project: ProjectRef } | { kind: "user" };
 
-/** One Task a Suggestion was derived from, linked to its Session. */
+/**
+ * One Task or Correction a Suggestion was derived from, linked to its Session.
+ * A Skill's Evidence is Tasks; a Rule's is Corrections, each with its Task.
+ */
 export interface Evidence {
   /** `at`: when the Task started. Together with the Session it identifies the Task. */
   task: { title: string; at: string };
   session: { id: string; harness: HarnessId };
   project: ProjectRef | null;
+  /** Set when the Evidence is a Correction: its text and timestamp. */
+  correction?: { text: string; at: string };
 }
 
 interface SuggestionBase {
@@ -33,12 +38,8 @@ interface SuggestionBase {
   kind: SuggestionKind;
   state: SuggestionState;
   title: string;
-  /** When an agent should use it. */
-  trigger: string;
   evidence: Evidence[];
   scope: Scope;
-  /** The Workflow it came from; null once that Workflow no longer exists. */
-  workflow: { id: number; name: string } | null;
   createdAt: string;
   acceptedAt: string | null;
   rejectedAt: string | null;
@@ -48,10 +49,22 @@ interface SuggestionBase {
 
 export interface SkillSuggestion extends SuggestionBase {
   kind: "skill";
+  /** When an agent should use it. */
+  trigger: string;
   steps: string[];
+  /** The Workflow it came from; null once that Workflow no longer exists. */
+  workflow: { id: number; name: string } | null;
 }
 
-export type Suggestion = SkillSuggestion;
+export interface RuleSuggestion extends SuggestionBase {
+  kind: "rule";
+  /** The one-line standing instruction. */
+  rule: string;
+  /** The Correction Cluster it came from; null once that Correction Cluster no longer exists. */
+  correctionCluster: { id: number; name: string } | null;
+}
+
+export type Suggestion = SkillSuggestion | RuleSuggestion;
 
 /**
  * The default Scope for some Evidence: Project scope when all of it comes from
@@ -65,12 +78,14 @@ export function defaultScope(evidence: readonly Pick<Evidence, "project">[]): Sc
 }
 
 /**
- * A Suggestion's fingerprint: one key per Task it was derived from. Kind-
- * agnostic callers (Rules from Corrections) build their own keys the same way:
- * stable across Analyses and re-clusters, unique per member.
+ * A Suggestion's fingerprint: one key per Task (for a Skill) or Correction
+ * (for a Rule) it was derived from, stable across Analyses and re-clusters.
+ * Migration 10 backfills the same keys from stored Evidence.
  */
 export function evidenceFingerprint(evidence: readonly Evidence[]): string[] {
-  return evidence.map((e) => `${e.session.harness}:${e.session.id}:${e.task.at}`);
+  return evidence.map(
+    (e) => `${e.session.harness}:${e.session.id}:${e.correction ? `correction:${e.correction.at}` : e.task.at}`,
+  );
 }
 
 /** An earlier Suggestion as `suggest` weighs it against a Workflow or Correction Cluster. */

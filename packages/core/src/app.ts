@@ -14,6 +14,7 @@ import {
   succession,
   taskEmbeddingText,
   taskSplitPrompt,
+  writeRule,
   writeSkill,
   type RepeatRule,
   type RepeatRuleResult,
@@ -40,6 +41,7 @@ import {
   type ClusterCorrection,
   type ClusterKind,
   type ClusterTask,
+  type PriorSuggestionRow,
   type SessionTasks,
   type StoredCluster,
   type StoredSession,
@@ -193,7 +195,8 @@ export interface SuggestResult {
   created: number[];
   /** Ids of Pending Suggestions removed because one in `created` supersedes them. */
   replaced: number[];
-  failed: { workflow: number; error: string }[];
+  /** A Skill that failed names its Workflow; a Rule, its Correction Cluster. */
+  failed: ({ workflow: number; error: string } | { correctionCluster: number; error: string })[];
   usage: ModelUsage[];
 }
 
@@ -206,8 +209,29 @@ export interface AcceptResult {
 /** The Scope the person picks for a Suggestion: User scope, or Project scope by a folder inside the Project. */
 export type ScopeChoice = { kind: "user" } | { kind: "project"; folder?: string };
 
-/** A Suggestion's editable content: `title`, `trigger`, and its kind's fields, each text or a list of text. */
-export type SuggestionForm = { title: string; trigger: string } & Record<string, string | string[]>;
+/**
+ * Whether a source with this Evidence needs a Suggestion written (see
+ * `regeneration`), and if so the kind-independent fields to store with it: a
+ * replacement keeps a Scope the person chose for the one it replaces.
+ */
+function nextSuggestion(evidence: Evidence[], prior: readonly PriorSuggestionRow[]) {
+  const fingerprint = evidenceFingerprint(evidence);
+  const decision = regeneration(fingerprint, prior);
+  if (decision.action === "keep") return null;
+  const replaced = decision.action === "replace" ? prior.find((p) => p.id === decision.id) : undefined;
+  return {
+    write: {
+      scope: replaced?.scopeOverridden ? replaced.scope : defaultScope(evidence),
+      scopeOverridden: replaced?.scopeOverridden,
+      evidence,
+      fingerprint,
+      replaces: replaced?.id,
+    },
+  };
+}
+
+/** A Suggestion's editable content: `title` and its kind's fields, each text or a list of text. */
+export type SuggestionForm = { title: string; trigger?: string } & Record<string, string | string[]>;
 
 /** An edited Suggestion that can't be saved, e.g. because a field is missing or empty. */
 export class SuggestionEditError extends Error {
@@ -714,10 +738,8 @@ export class App {
         session: { id: t.session, harness: t.harness },
         project: t.project,
       }));
-      const fingerprint = evidenceFingerprint(evidence);
-      const decision = regeneration(fingerprint, prior);
-      if (decision.action === "keep") continue;
-      const replaced = decision.action === "replace" ? prior.find((p) => p.id === decision.id) : undefined;
+      const next = nextSuggestion(evidence, prior);
+      if (!next) continue;
       const tasks = workflow.tasks.map((t) => ({
         title: t.title,
         userMessages: this.store.taskMessages(t.harness, t.session, t.position),
@@ -731,24 +753,65 @@ export class App {
           workflow: { id: workflow.id, name: workflow.name },
           title: skill.title,
           trigger: skill.trigger,
-          body: { steps: skill.steps },
-          scope: replaced?.scopeOverridden ? replaced.scope : defaultScope(evidence),
-          scopeOverridden: replaced?.scopeOverridden,
-          evidence,
-          fingerprint,
-          replaces: replaced?.id,
+          steps: skill.steps,
+          ...next.write,
           createdAt: this.deps.clock.now(),
         });
         result.created.push(id);
-        if (replaced) result.replaced.push(replaced.id);
+        if (next.write.replaces !== undefined) result.replaced.push(next.write.replaces);
       } catch (error) {
         if (signal?.aborted) break;
         if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
         result.failed.push({ workflow: workflow.id, error: error instanceof Error ? error.message : String(error) });
       }
     }
+    if (!signal?.aborted) await this.suggestRules(model, usage, result, signal);
     result.usage = usage.byModel();
     return result;
+  }
+
+  /** Writes a Rule Suggestion for every qualifying Correction Cluster that needs one, as `suggest` does for Workflows. */
+  private async suggestRules(
+    model: ModelProvider["strong"],
+    usage: UsageTally,
+    result: SuggestResult,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const prior = this.store.priorSuggestions("rule");
+    for (const cluster of this.listCorrections().correctionClusters) {
+      if (signal?.aborted) return;
+      const evidence: Evidence[] = cluster.corrections.map((c) => ({
+        correction: { text: c.text, at: c.at },
+        task: { title: c.task, at: c.taskAt },
+        session: { id: c.session, harness: c.harness },
+        project: c.project,
+      }));
+      const next = nextSuggestion(evidence, prior);
+      if (!next) continue;
+      try {
+        const { rule, tokens } = await writeRule(
+          model,
+          { name: cluster.name, corrections: cluster.corrections.map((c) => ({ text: c.text, task: c.task })) },
+          signal,
+        );
+        usage.add(model.modelId, tokens);
+        if (signal?.aborted) return;
+        const id = this.store.createSuggestion({
+          kind: "rule",
+          correctionCluster: { id: cluster.id, name: cluster.name },
+          title: rule.title,
+          rule: rule.rule,
+          ...next.write,
+          createdAt: this.deps.clock.now(),
+        });
+        result.created.push(id);
+        if (next.write.replaces !== undefined) result.replaced.push(next.write.replaces);
+      } catch (error) {
+        if (signal?.aborted) return;
+        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
+        result.failed.push({ correctionCluster: cluster.id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
   }
 
   /** Suggestions, oldest first, optionally only those in `state`. */
@@ -779,12 +842,13 @@ export class App {
 
   /**
    * A Pending Suggestion's content in the format-neutral form, as the person
-   * edits it: `title`, `trigger` and the fields of its kind (e.g. `steps`).
+   * edits it: `title` and the fields of its kind (`trigger` and `steps` for a
+   * Skill, `rule` for a Rule).
    */
   suggestionForm(id: number): SuggestionForm {
-    this.pendingSuggestion(id, "edited");
+    const { kind } = this.pendingSuggestion(id, "edited");
     const { title, trigger, body } = this.store.suggestionContent(id)!;
-    return { title, trigger, ...body } as SuggestionForm;
+    return (kind === "skill" ? { title, trigger, ...body } : { title, ...body }) as SuggestionForm;
   }
 
   /**
@@ -793,7 +857,7 @@ export class App {
    */
   editSuggestion(id: number, form: unknown): Suggestion {
     const { title, trigger, ...body } = validateForm(this.suggestionForm(id), form);
-    this.store.editSuggestion(id, { title, trigger, body }, this.deps.clock.now());
+    this.store.editSuggestion(id, { title, trigger: trigger ?? "", body }, this.deps.clock.now());
     return this.store.getSuggestion(id)!;
   }
 

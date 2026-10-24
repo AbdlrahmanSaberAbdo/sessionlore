@@ -192,6 +192,18 @@ export const migrations: readonly Migration[] = [
   },
   {
     version: 9,
+    name: "rule suggestions",
+    sql: `
+      -- A Rule's Correction Cluster. cluster_id stays for a Skill's Workflow (a Task Cluster).
+      ALTER TABLE suggestions ADD COLUMN correction_cluster_id INTEGER REFERENCES correction_clusters(id) ON DELETE SET NULL;
+      CREATE INDEX suggestions_correction_cluster ON suggestions (correction_cluster_id);
+      -- Evidence that is a Correction: its text and timestamp, beside its Task.
+      ALTER TABLE suggestion_evidence ADD COLUMN correction_text TEXT;
+      ALTER TABLE suggestion_evidence ADD COLUMN correction_at TEXT;
+    `,
+  },
+  {
+    version: 10,
     name: "suggestion edits, Scope overrides and fingerprints",
     sql: `
       -- Set when the person edited the Suggestion's content.
@@ -199,10 +211,12 @@ export const migrations: readonly Migration[] = [
       -- 1 when the person chose the Scope instead of keeping the default.
       ALTER TABLE suggestions ADD COLUMN scope_overridden INTEGER NOT NULL DEFAULT 0;
       -- JSON array of keys for the Tasks (or Corrections) it was derived from, so a later suggest can tell
-      -- whether its source changed even after a re-cluster has cleared cluster_id.
+      -- whether its source changed without relying on cluster ids. Same keys as evidenceFingerprint().
       ALTER TABLE suggestions ADD COLUMN fingerprint TEXT NOT NULL DEFAULT '[]';
       UPDATE suggestions SET fingerprint = (
-        SELECT json_group_array(e.harness || ':' || e.session_id || ':' || e.task_at)
+        SELECT json_group_array(
+                 e.harness || ':' || e.session_id || ':' ||
+                 CASE WHEN e.correction_at IS NULL THEN e.task_at ELSE 'correction:' || e.correction_at END)
           FROM (SELECT * FROM suggestion_evidence WHERE suggestion_id = suggestions.id ORDER BY position) e
       );
     `,

@@ -116,13 +116,8 @@ export interface SuggestionContent {
 }
 
 /** A Suggestion as written, before it has an id or a state. */
-export interface NewSuggestion {
-  kind: SuggestionKind;
-  workflow: { id: number; name: string };
+export type NewSuggestion = {
   title: string;
-  trigger: string;
-  /** Kind-specific content, e.g. `{ steps }` for a Skill. */
-  body: Record<string, unknown>;
   scope: Scope;
   /** True when `scope` is one the person chose, carried over from the Suggestion this replaces. */
   scopeOverridden?: boolean;
@@ -132,7 +127,13 @@ export interface NewSuggestion {
   /** A Pending Suggestion this one supersedes; it is removed in the same transaction. */
   replaces?: number;
   createdAt: Date;
-}
+} & (
+  | { kind: "skill"; workflow: { id: number; name: string }; trigger: string; steps: readonly string[] }
+  | { kind: "rule"; correctionCluster: { id: number; name: string }; rule: string }
+);
+
+/** An earlier Suggestion with the Scope it would hand to one replacing it. */
+export type PriorSuggestionRow = PriorSuggestion & { scope: Scope; scopeOverridden: boolean };
 
 function rowScope(row: { scope_kind: string; scope_root: string | null; scope_name: string | null }): Scope {
   return row.scope_kind === "project" && row.scope_root && row.scope_name
@@ -144,6 +145,8 @@ export interface ClusterCorrection {
   text: string;
   /** Title of the Task the Correction belongs to. */
   task: string;
+  /** When that Task started. */
+  taskAt: string;
   /** Id of the Session the Correction belongs to. */
   session: string;
   harness: HarnessId;
@@ -705,15 +708,18 @@ export class Store {
     return this.db.transaction(() => {
       const { scope } = input;
       const id = this.db.run(
-        `INSERT INTO suggestions (kind, state, cluster_id, workflow_name, title, trigger, body, scope_kind, scope_root, scope_name,
-                                  scope_overridden, fingerprint, created_at)
-         VALUES (?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO suggestions (kind, state, cluster_id, correction_cluster_id, workflow_name, title, trigger, body,
+                                  scope_kind, scope_root, scope_name, scope_overridden, fingerprint, created_at)
+         VALUES (?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         input.kind,
-        input.workflow.id,
-        input.workflow.name,
+        input.kind === "skill" ? input.workflow.id : null,
+        input.kind === "rule" ? input.correctionCluster.id : null,
+        // The source's name when written (Workflow or Correction Cluster), shown if it is unnamed later.
+        input.kind === "skill" ? input.workflow.name : input.correctionCluster.name,
         input.title,
-        input.trigger,
-        JSON.stringify(input.body),
+        input.kind === "skill" ? input.trigger : "",
+        // Kind-specific content.
+        JSON.stringify(input.kind === "skill" ? { steps: input.steps } : { rule: input.rule }),
         scope.kind,
         scope.kind === "project" ? scope.project.path : null,
         scope.kind === "project" ? scope.project.name : null,
@@ -723,8 +729,8 @@ export class Store {
       ).lastInsertRowid;
       input.evidence.forEach((e, position) => {
         this.db.run(
-          `INSERT INTO suggestion_evidence (suggestion_id, position, task_title, task_at, session_id, harness, project_root, project_name)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO suggestion_evidence (suggestion_id, position, task_title, task_at, session_id, harness, project_root, project_name, correction_text, correction_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           id,
           position,
           e.task.title,
@@ -733,6 +739,8 @@ export class Store {
           e.session.harness,
           e.project?.path ?? null,
           e.project?.name ?? null,
+          e.correction?.text ?? null,
+          e.correction?.at ?? null,
         );
       });
       // Removed after the insert, so the new Suggestion never reuses the old one's id.
@@ -741,8 +749,8 @@ export class Store {
     });
   }
 
-  /** Every Suggestion of `kind` as `suggest` weighs it against a Workflow, newest first. */
-  priorSuggestions(kind: SuggestionKind): (PriorSuggestion & { scope: Scope; scopeOverridden: boolean })[] {
+  /** Every Suggestion of `kind` as `suggest` weighs it against a Workflow or Correction Cluster, newest first. */
+  priorSuggestions(kind: SuggestionKind): PriorSuggestionRow[] {
     return this.db
       .all<{
         id: number;
@@ -829,6 +837,8 @@ export class Store {
       state: string;
       cluster_id: number | null;
       cluster_name: string | null;
+      correction_cluster_id: number | null;
+      correction_cluster_name: string | null;
       workflow_name: string | null;
       title: string;
       trigger: string;
@@ -841,7 +851,10 @@ export class Store {
       rejected_at: string | null;
       installed_files: string;
     }>(
-      `SELECT g.*, c.name AS cluster_name FROM suggestions g LEFT JOIN clusters c ON c.id = g.cluster_id
+      `SELECT g.*, c.name AS cluster_name, cc.name AS correction_cluster_name
+         FROM suggestions g
+         LEFT JOIN clusters c ON c.id = g.cluster_id
+         LEFT JOIN correction_clusters cc ON cc.id = g.correction_cluster_id
         ${where}
         ORDER BY g.id`,
       ...params,
@@ -855,31 +868,50 @@ export class Store {
           harness: string;
           project_root: string | null;
           project_name: string | null;
+          correction_text: string | null;
+          correction_at: string | null;
         }>("SELECT * FROM suggestion_evidence WHERE suggestion_id = ? ORDER BY position", row.id)
         .map(
           (e): Evidence => ({
+            ...(e.correction_text !== null && e.correction_at !== null
+              ? { correction: { text: e.correction_text, at: e.correction_at } }
+              : {}),
             task: { title: e.task_title, at: e.task_at },
             session: { id: e.session_id, harness: e.harness as HarnessId },
             project: e.project_root && e.project_name ? { name: e.project_name, path: e.project_root } : null,
           }),
         );
       const scope = rowScope(row);
-      const body = JSON.parse(row.body) as { steps?: string[] };
-      return {
+      const body = JSON.parse(row.body) as { steps?: string[]; rule?: string };
+      const base = {
         id: row.id,
-        kind: row.kind as SuggestionKind,
         state: row.state as SuggestionState,
         title: row.title,
-        trigger: row.trigger,
-        steps: body.steps ?? [],
         evidence,
         scope,
-        workflow:
-          row.cluster_id === null ? null : { id: row.cluster_id, name: row.cluster_name ?? row.workflow_name ?? row.title },
         createdAt: row.created_at,
         acceptedAt: row.accepted_at,
         rejectedAt: row.rejected_at,
         installedFiles: JSON.parse(row.installed_files) as string[],
+      };
+      const sourceName = row.workflow_name ?? row.title;
+      if (row.kind === "rule") {
+        return {
+          ...base,
+          kind: "rule",
+          rule: body.rule ?? "",
+          correctionCluster:
+            row.correction_cluster_id === null
+              ? null
+              : { id: row.correction_cluster_id, name: row.correction_cluster_name ?? sourceName },
+        };
+      }
+      return {
+        ...base,
+        kind: "skill",
+        trigger: row.trigger,
+        steps: body.steps ?? [],
+        workflow: row.cluster_id === null ? null : { id: row.cluster_id, name: row.cluster_name ?? sourceName },
       };
     });
   }
@@ -994,6 +1026,7 @@ export class Store {
       name: string | null;
       text: string;
       task: string;
+      task_at: string;
       session_id: string;
       harness: string;
       project_name: string | null;
@@ -1001,6 +1034,7 @@ export class Store {
       at: string;
     }>(
       `SELECT c.id AS cluster_id, c.name, m.text, t.title AS task, s.external_id AS session_id, s.harness,
+              COALESCE((SELECT MIN(f.timestamp) FROM user_messages f WHERE f.task_id = t.id), s.started_at) AS task_at,
               p.name AS project_name, p.root AS project_root, m.timestamp AS at
          FROM correction_clusters c
          JOIN user_messages m ON m.correction_cluster_id = c.id AND m.intent = 'Correction'
@@ -1014,6 +1048,7 @@ export class Store {
       cluster.corrections.push({
         text: row.text,
         task: row.task,
+        taskAt: row.task_at,
         session: row.session_id,
         harness: row.harness as HarnessId,
         project: row.project_root && row.project_name ? { name: row.project_name, path: row.project_root } : null,
