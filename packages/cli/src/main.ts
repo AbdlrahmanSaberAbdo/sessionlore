@@ -13,6 +13,7 @@ import {
   type ModelProvider,
   type Renderer,
 } from "@sessionlore/core";
+import { createServer, listen } from "@sessionlore/server";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
 import { unsupportedNodeMessage } from "./node-version.js";
 
@@ -36,6 +37,10 @@ export interface CliEnvironment {
   embedder?: Embedder;
   /** Defaults to every Adapter sessionlore ships. */
   adapters?: readonly Adapter[];
+  /** Opens a URL in the person's browser; `serve` only prints the address without it. */
+  openBrowser?: (url: string) => void;
+  /** Folder of the built dashboard UI that `serve` ships. */
+  uiDir?: string;
   /** Defaults to every Renderer sessionlore ships. */
   renderers?: readonly Renderer[];
 }
@@ -58,6 +63,7 @@ interface CommandContext {
   warn(text: string): void;
   /** `--last N`: limit a Scan to the N most recent Sessions. */
   last?: number;
+  serve: { port: number; open: boolean; openBrowser?: (url: string) => void; uiDir?: string };
   out(text: string): void;
   err(text: string): void;
 }
@@ -187,6 +193,42 @@ const commands: Record<string, Command> = {
       }
     },
   },
+  workflow: {
+    summary: "Show one Workflow or Cluster with its Tasks: workflow <id>",
+    run({ app, json, args, out }) {
+      const [id] = args;
+      if (!id || !/^\d+$/.test(id)) throw new Error("Which Workflow? Usage: sessionlore workflow <id>");
+      const workflow = app.getWorkflow(Number(id));
+      if (!workflow) throw new Error(`No Workflow has id ${id}. Run \`sessionlore workflows\` to list them.`);
+      if (json) return out(JSON.stringify({ workflow }, null, 2) + "\n");
+      out(`${workflow.name}  (${workflow.counted.tasks} Tasks in ${workflow.counted.sessions} Sessions)\n`);
+      for (const t of workflow.tasks) out(`  ${t.at.slice(0, 10)}  ${t.harness}  ${t.title}\n`);
+    },
+  },
+  recluster: {
+    summary: "Rebuild every Cluster from scratch, mapping old Workflows onto the new ones",
+    async run({ app, json, signal, out }) {
+      const result = await app.recluster({ signal });
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      const sections = [
+        ["Clusters", result],
+        ["Correction Clusters", result.corrections],
+      ] as const;
+      if (sections.every(([, s]) => s.mapped.length === 0 && s.created.length === 0)) {
+        return out("No Clusters yet. Run `sessionlore analyze` first.\n");
+      }
+      for (const [title, { mapped, created }] of sections) {
+        if (mapped.length === 0 && created.length === 0) continue;
+        out(`${title}:\n`);
+        for (const { from, to } of mapped) out(from.id === to.id ? `  ${from.name}: kept\n` : `  ${from.name} -> ${to.name}\n`);
+        for (const c of created) out(`  New: ${c.name}\n`);
+      }
+      for (const { model, tokens, costUsd } of result.usage) {
+        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
+        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+      }
+    },
+  },
   suggest: {
     summary: "Write Suggestions with the strong model: a Skill for each Workflow and a Rule for each Correction Cluster that has none",
     async run({ app, json, signal, modelProvider, out, err }) {
@@ -284,6 +326,16 @@ const commands: Record<string, Command> = {
       }
     },
   },
+  serve: {
+    summary: "Open the dashboard in your browser, served on localhost only",
+    async run({ app, serve, signal, out }) {
+      const server = await listen(createServer({ app, uiDir: serve.uiDir }), { port: serve.port });
+      out(`sessionlore dashboard: ${server.url}\nPress Ctrl-C to stop.\n`);
+      if (serve.open) serve.openBrowser?.(server.url);
+      await stopped(signal);
+      await server.close();
+    },
+  },
   session: {
     summary: "Show one stored Session with its messages: session <id>",
     run({ app, json, args, out }) {
@@ -299,6 +351,18 @@ const commands: Record<string, Command> = {
     },
   },
 };
+
+/** Resolves once the person interrupts (Ctrl-C), at once if they already have. */
+function stopped(signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (!signal) return;
+    if (signal.aborted) return resolve();
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+/** The dashboard's port unless `--port` says otherwise; a free one is picked when it is taken. */
+const DEFAULT_PORT = 4848;
 
 function suggestionId(args: string[], command: string): number {
   const [id] = args;
@@ -340,8 +404,41 @@ function usage(): string {
     `Options:\n  --json                     Machine-readable output\n` +
     `  --last N                   scan: read only the N most recent Sessions\n` +
     `  --yes, -y                  analyze: skip the cost estimate confirmation\n` +
-    `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n`
+    `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n` +
+    `  --port N                   serve: port to serve the dashboard on (default ${DEFAULT_PORT})\n` +
+    `  --no-open                  serve: print the dashboard's address without opening the browser\n`
   );
+}
+
+/** What opening the App needs from the CLI's surroundings. */
+export type AppEnvironment = Pick<CliEnvironment, "homeDir" | "env" | "clock" | "modelProvider" | "embedder" | "adapters" | "renderers">;
+
+/**
+ * Opens the App on the person's store and config file, wired the way every
+ * command (and the dashboard server) uses it. Throws on an invalid config.
+ */
+export function openApp(io: AppEnvironment): App {
+  return openConfiguredApp(io).app;
+}
+
+function openConfiguredApp(io: AppEnvironment): { app: App; modelProvider: ModelProviderResolution } {
+  const config = loadConfig(io.homeDir);
+  const modelProvider: ModelProviderResolution = io.modelProvider
+    ? { ok: true, modelProvider: io.modelProvider }
+    : resolveModelProvider(config.modelProvider, io.env, configPath(io.homeDir));
+  const app = App.open({
+    storePath: storePath(io.homeDir),
+    harnessContext: { homeDir: io.homeDir, env: io.env },
+    adapters: io.adapters ?? allAdapters,
+    clock: io.clock,
+    modelProvider: modelProvider.ok ? modelProvider.modelProvider : undefined,
+    embedder: io.embedder,
+    projectFilter: config.projects,
+    repeatRule: config.repeatRule,
+    prices: config.prices,
+    renderers: io.renderers ?? allRenderers,
+  });
+  return { app, modelProvider };
 }
 
 /** Runs the CLI and returns its exit code. */
@@ -363,6 +460,8 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
         help: { type: "boolean", short: "h" },
         "show-redacted": { type: "string" },
         last: { type: "string" },
+        port: { type: "string" },
+        "no-open": { type: "boolean", default: false },
       },
     });
   } catch (error) {
@@ -390,24 +489,20 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     }
   }
 
+  let port = DEFAULT_PORT;
+  if (parsed.values.port !== undefined) {
+    port = /^\d+$/.test(parsed.values.port) ? Number(parsed.values.port) : -1;
+    if (port < 0 || port > 65535) {
+      io.stderr(`--port takes a port number from 0 to 65535, not "${parsed.values.port}"\n\n${usage()}`);
+      return 2;
+    }
+  }
+
   let app: App | undefined;
   try {
-    const config = loadConfig(io.homeDir);
-    const modelProvider: ModelProviderResolution = io.modelProvider
-      ? { ok: true, modelProvider: io.modelProvider }
-      : resolveModelProvider(config.modelProvider, io.env, configPath(io.homeDir));
-    app = App.open({
-      storePath: storePath(io.homeDir),
-      harnessContext: { homeDir: io.homeDir, env: io.env },
-      adapters: io.adapters ?? allAdapters,
-      clock: io.clock,
-      modelProvider: modelProvider.ok ? modelProvider.modelProvider : undefined,
-      embedder: io.embedder,
-      projectFilter: config.projects,
-      repeatRule: config.repeatRule,
-      prices: config.prices,
-      renderers: io.renderers ?? allRenderers,
-    });
+    const opened = openConfiguredApp(io);
+    app = opened.app;
+    const { modelProvider } = opened;
     const exitCode = await command.run({
       app,
       json: parsed.values.json ?? false,
@@ -419,6 +514,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider,
       configFile: configPath(io.homeDir),
       last,
+      serve: { port, open: !parsed.values["no-open"], openBrowser: io.openBrowser, uiDir: io.uiDir },
       out: io.stdout,
       err: io.stderr,
       warn: io.stderr,

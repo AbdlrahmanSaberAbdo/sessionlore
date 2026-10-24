@@ -156,6 +156,24 @@ describe("suggest Rules", () => {
     expect(opts.requests().filter((r) => r.includes("<correction-cluster"))).toHaveLength(1);
     expect(existsSync(join(shop, "CLAUDE.md"))).toBe(false);
   });
+
+  it("keeps a Rule with its Correction Cluster through a recluster, so it isn't proposed again", async () => {
+    const shop = home.gitRepo("code/shop");
+    pnpmCorrectionsIn(shop);
+    session(shop, "2026-05-26T09:00:00.000Z", "add a helper", "no, not yarn");
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    const pnpm = (await runCli(home, ["corrections", "--json"], opts)).json().correctionClusters[0];
+
+    const together = { ...opts, embedder: topicEmbedder(["no, "], "embedder-together") };
+    const reclustered = await runCli(home, ["recluster", "--json"], together);
+    expect(reclustered.exitCode, reclustered.stderr).toBe(0);
+
+    const [rule] = await review();
+    expect(rule).toMatchObject({ id, correctionCluster: { id: pnpm.id } });
+    expect((await suggest(together)).created).toEqual([]);
+  });
 });
 
 describe("accept a Rule", () => {
