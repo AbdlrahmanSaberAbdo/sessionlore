@@ -27,6 +27,8 @@ export interface HarnessScanResult {
   updated: number;
   /** Stored Sessions skipped because nothing changed since they were last read. */
   unchanged: number;
+  /** Problems the person should know about, such as storage the Adapter did not recognise. */
+  warnings: string[];
 }
 
 export interface ScanOptions {
@@ -56,9 +58,11 @@ export class App {
   async scan(options: ScanOptions = {}): Promise<ScanResult> {
     const scanId = this.store.startScan(this.deps.clock.now());
     const counts = new Map<Adapter, { added: number; updated: number; unchanged: number }>();
+    const unrecognized = new Map<Adapter, Map<string, number>>();
     const found: { adapter: Adapter; source: SessionSource }[] = [];
     for (const adapter of this.deps.adapters) {
       counts.set(adapter, { added: 0, updated: 0, unchanged: 0 });
+      unrecognized.set(adapter, new Map());
       for (const storage of await adapter.discover(this.deps.harnessContext)) {
         for await (const source of adapter.listSessions(storage)) found.push({ adapter, source });
       }
@@ -78,6 +82,8 @@ export class App {
       }
       const session = await adapter.readSession(source);
       if (!session) continue;
+      const tally = unrecognized.get(adapter)!;
+      for (const [shape, n] of Object.entries(session.unrecognized)) tally.set(shape, (tally.get(shape) ?? 0) + n);
       const project = session.cwd ? resolveProject(session.cwd) : null;
       const result = this.store.saveSession({
         harness: adapter.harness,
@@ -96,6 +102,7 @@ export class App {
         harness: adapter.harness,
         name: adapter.displayName,
         ...count,
+        warnings: unrecognizedWarnings(adapter, unrecognized.get(adapter)!),
       })),
     };
   }
@@ -103,4 +110,17 @@ export class App {
   listSessions(): StoredSession[] {
     return this.store.listSessions();
   }
+}
+
+function unrecognizedWarnings(adapter: Adapter, tally: Map<string, number>): string[] {
+  if (tally.size === 0) return [];
+  const total = [...tally.values()].reduce((sum, n) => sum + n, 0);
+  const shapes = [...tally]
+    .sort((a, b) => b[1] - a[1])
+    .map(([shape, n]) => `${shape}: ${n}`)
+    .join(", ");
+  return [
+    `${adapter.displayName}: skipped ${total} ${total === 1 ? "record" : "records"} sessionlore does not recognise (${shapes}). ` +
+      `${adapter.displayName} may have changed its storage format; please report this so sessionlore can read it.`,
+  ];
 }

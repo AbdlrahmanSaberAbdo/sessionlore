@@ -48,6 +48,12 @@ export interface HarnessSession {
   subagentRunCount: number;
   /** Tokens of the Session and its subagent runs. */
   tokens: TokenUsage;
+  /**
+   * Records the Adapter did not recognise and skipped, counted by a short
+   * description of their shape (e.g. `record type "foo"`). Scan turns these into
+   * a visible warning, so a Harness format change never silently drops data (ADR 0001).
+   */
+  unrecognized: Record<string, number>;
 }
 
 /**

@@ -120,6 +120,51 @@ describe("scan of Claude Code Sessions: the tricky cases", () => {
   });
 });
 
+describe("unknown storage shapes", () => {
+  it("completes the Scan and warns with the count of records it did not recognise", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, {
+      cwd: repo,
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [
+        turn.user("add a checkout button"),
+        turn.record({ type: "hologram", frames: 3 }),
+        turn.assistant("Added it."),
+        turn.record({ type: "hologram", frames: 1 }),
+        turn.record({ type: "summary", summary: "Checkout button" }),
+      ],
+    });
+
+    const scan = await runCli(home, ["scan", "--json"]);
+
+    expect(scan.exitCode).toBe(0);
+    expect(scan.json().harnesses[0]).toMatchObject({ added: 1 });
+    expect(scan.stderr).toMatch(/Claude Code.*2 records.*not recognise/);
+    expect(scan.stderr).toContain('"hologram"');
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+    expect(sessions[0].userMessageCount).toBe(1);
+  });
+
+  it("does not warn when every record is one Claude Code is known to write", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, {
+      cwd: repo,
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [
+        turn.record({ type: "file-history-snapshot", snapshot: {} }),
+        turn.user("hi"),
+        turn.record({ type: "system", subtype: "turn_duration", durationMs: 1200 }),
+        turn.record({ type: "attachment", attachment: { type: "date" } }),
+      ],
+    });
+
+    const scan = await runCli(home, ["scan"]);
+
+    expect(scan.exitCode).toBe(0);
+    expect(scan.stderr).toBe("");
+  });
+});
+
 describe("scan --last N", () => {
   it("stores only the N most recent Sessions", async () => {
     const repo = home.gitRepo("code/shop");

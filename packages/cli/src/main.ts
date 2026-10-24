@@ -20,6 +20,7 @@ export interface CliEnvironment {
 interface CommandContext {
   app: App;
   json: boolean;
+  warn(text: string): void;
   /** `--last N`: limit a Scan to the N most recent Sessions. */
   last?: number;
   out(text: string): void;
@@ -33,8 +34,9 @@ interface Command {
 const commands: Record<string, Command> = {
   scan: {
     summary: "Read Sessions from every Harness on this machine into the local store",
-    async run({ app, json, last, out }) {
+    async run({ app, json, last, out, warn }) {
       const result = await app.scan({ last });
+      for (const warning of result.harnesses.flatMap((h) => h.warnings)) warn(`Warning: ${warning}\n`);
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       for (const harness of result.harnesses) {
         out(
@@ -123,7 +125,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider: io.modelProvider,
       embedder: io.embedder,
     });
-    await command.run({ app, json: parsed.values.json ?? false, last, out: io.stdout });
+    await command.run({ app, json: parsed.values.json ?? false, last, out: io.stdout, warn: io.stderr });
     return 0;
   } catch (error) {
     io.stderr(`sessionlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);

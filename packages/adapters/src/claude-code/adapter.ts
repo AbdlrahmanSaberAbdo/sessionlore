@@ -60,8 +60,10 @@ export const claudeCodeAdapter: Adapter = {
     const userMessages: HarnessUserMessage[] = [];
     const main = new AssistantMessages();
     const tree = new MessageTree();
+    const unrecognized: Record<string, number> = {};
 
     for await (const record of readRecords(source.location)) {
+      countUnrecognized(record, unrecognized);
       tree.add(record);
       if (!isConversation(record)) continue;
       const timestamp = parseTimestamp(record.timestamp);
@@ -87,6 +89,7 @@ export const claudeCodeAdapter: Adapter = {
     const subagentUsage = new AssistantMessages();
     for (const file of subagents) {
       for await (const record of readRecords(file)) {
+        countUnrecognized(record, unrecognized);
         if (record.type === "assistant") subagentUsage.add(record);
       }
     }
@@ -100,11 +103,48 @@ export const claudeCodeAdapter: Adapter = {
       assistantTurnCount: main.count,
       subagentRunCount: subagents.length,
       tokens: sumUsage([main.tokens, subagentUsage.tokens]),
+      unrecognized,
     };
   },
 };
 
 type JsonRecord = Record<string, unknown>;
+
+/**
+ * Every record type Claude Code is known to write. Only `user` and `assistant`
+ * carry the conversation; the rest are metadata sessionlore does not need.
+ * Anything else is counted and reported, never silently skipped (ADR 0001).
+ */
+const KNOWN_RECORD_TYPES = new Set([
+  "user",
+  "assistant",
+  "attachment",
+  "system",
+  "summary",
+  "progress",
+  "api-request",
+  "api-request-blob",
+  "api-request-shape",
+  "queue-operation",
+  "last-prompt",
+  "custom-title",
+  "ai-title",
+  "agent-name",
+  "atis-latch",
+  "mode",
+  "permission-mode",
+  "file-history-snapshot",
+  "file-history-delta",
+  "cost-state",
+  "pr-link",
+]);
+
+function countUnrecognized(record: JsonRecord, tally: Record<string, number>): void {
+  const type = record.type;
+  if (typeof type === "string" && KNOWN_RECORD_TYPES.has(type)) return;
+  const shape = typeof type === "string" ? `record type ${JSON.stringify(type)}` : "record without a type";
+  tally[shape] = (tally[shape] ?? 0) + 1;
+}
 
 function isConversation(record: JsonRecord): boolean {
   return (record.type === "user" || record.type === "assistant") && record.isSidechain !== true;
