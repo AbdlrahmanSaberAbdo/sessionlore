@@ -1,6 +1,16 @@
 import { parseArgs } from "node:util";
 import { allAdapters } from "@sessionlore/adapters";
-import { App, storePath, type Adapter, type Clock, type Embedder, type Env, type ModelProvider } from "@sessionlore/core";
+import {
+  App,
+  configPath,
+  loadConfig,
+  storePath,
+  type Adapter,
+  type Clock,
+  type Embedder,
+  type Env,
+  type ModelProvider,
+} from "@sessionlore/core";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
 import { unsupportedNodeMessage } from "./node-version.js";
 
@@ -147,12 +157,12 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     return 2;
   }
 
-  const modelProvider: ModelProviderResolution = io.modelProvider
-    ? { ok: true, modelProvider: io.modelProvider }
-    : resolveModelProvider(io.homeDir, io.env);
-
   let app: App | undefined;
   try {
+    const config = loadConfig(io.homeDir);
+    const modelProvider: ModelProviderResolution = io.modelProvider
+      ? { ok: true, modelProvider: io.modelProvider }
+      : resolveModelProvider(config.modelProvider, io.env, configPath(io.homeDir));
     app = App.open({
       storePath: storePath(io.homeDir),
       harnessContext: { homeDir: io.homeDir, env: io.env },
@@ -160,6 +170,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       clock: io.clock,
       modelProvider: modelProvider.ok ? modelProvider.modelProvider : undefined,
       embedder: io.embedder,
+      projectFilter: config.projects,
     });
     const exitCode = await command.run({
       app,

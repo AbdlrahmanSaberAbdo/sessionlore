@@ -1,34 +1,35 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { dataDir, type Env, type ModelProvider, type ModelProviderModel } from "@sessionlore/core";
+import {
+  modelProviderNames,
+  type Env,
+  type ModelProvider,
+  type ModelProviderModel,
+  type ModelProviderName,
+  type ModelProviderSettings,
+} from "@sessionlore/core";
 import { createOllama } from "ollama-ai-provider-v2";
 import { z } from "zod";
 
 /**
- * Builds the Model Provider from the `modelProvider` section of the config
- * file, with `SESSIONLORE_*` environment variables taking precedence (ADR 0007).
+ * Builds the Model Provider from the config file's `modelProvider` section,
+ * with `SESSIONLORE_*` environment variables taking precedence (ADR 0007).
  */
 
-const providerNames = ["anthropic", "openai", "google", "ollama", "openai-compatible"] as const;
-type ProviderName = (typeof providerNames)[number];
-
 /** The provider's own environment variable for its API key. */
-const defaultKeyEnv: Partial<Record<ProviderName, string>> = {
+const defaultKeyEnv: Partial<Record<ModelProviderName, string>> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   google: "GOOGLE_GENERATIVE_AI_API_KEY",
 };
 
 const settingsSchema = z.object({
-  provider: z.enum(providerNames),
+  provider: z.enum(modelProviderNames),
   cheapModel: z.string().min(1),
   strongModel: z.string().min(1),
   apiKey: z.string().min(1).optional(),
-  /** Name of the environment variable holding the API key. */
   apiKeyEnv: z.string().min(1).optional(),
   baseURL: z.string().url().optional(),
 });
@@ -37,27 +38,12 @@ type Settings = z.infer<typeof settingsSchema>;
 
 export type ModelProviderResolution = { ok: true; modelProvider: ModelProvider } | { ok: false; problem: string };
 
-export function configPath(homeDir: string): string {
-  return join(dataDir(homeDir), "config.json");
-}
-
-export function resolveModelProvider(homeDir: string, env: Env): ModelProviderResolution {
-  const path = configPath(homeDir);
-  let fromFile: Record<string, unknown> = {};
-  if (existsSync(path)) {
-    let config: unknown;
-    try {
-      config = JSON.parse(readFileSync(path, "utf8"));
-    } catch (error) {
-      return { ok: false, problem: `${path} is not valid JSON: ${(error as Error).message}\n` };
-    }
-    const section = (config as { modelProvider?: unknown } | null)?.modelProvider;
-    if (section !== undefined && (typeof section !== "object" || section === null || Array.isArray(section))) {
-      return { ok: false, problem: `"modelProvider" in ${path} must be an object.\n` };
-    }
-    fromFile = (section as Record<string, unknown> | undefined) ?? {};
-  }
-
+/** `configFile` is only used to tell the person where to configure. */
+export function resolveModelProvider(
+  fromFile: ModelProviderSettings | null,
+  env: Env,
+  configFile: string,
+): ModelProviderResolution {
   const fromEnv = withoutUndefined({
     provider: env.SESSIONLORE_PROVIDER,
     cheapModel: env.SESSIONLORE_CHEAP_MODEL,
@@ -66,14 +52,14 @@ export function resolveModelProvider(homeDir: string, env: Env): ModelProviderRe
     baseURL: env.SESSIONLORE_BASE_URL,
   });
   const merged = { ...fromFile, ...fromEnv };
-  if (Object.keys(merged).length === 0) return { ok: false, problem: notConfiguredMessage(path) };
+  if (Object.keys(merged).length === 0) return { ok: false, problem: notConfiguredMessage(configFile) };
 
   const parsed = settingsSchema.safeParse(merged);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  - ${i.path.join(".") || "modelProvider"}: ${i.message}`);
     return {
       ok: false,
-      problem: `The Model Provider configuration is invalid:\n${issues.join("\n")}\n\n${notConfiguredMessage(path)}`,
+      problem: `The Model Provider configuration is invalid:\n${issues.join("\n")}\n\n${notConfiguredMessage(configFile)}`,
     };
   }
   return build(parsed.data, env);
@@ -116,10 +102,10 @@ function modelFactory(settings: Settings, apiKey: string | undefined): (id: stri
   }
 }
 
-function notConfiguredMessage(path: string): string {
+function notConfiguredMessage(configFile: string): string {
   return `No Model Provider is configured, so Analysis cannot run. Scan still works without one.
 
-Add a "modelProvider" section to ${path}:
+Add a "modelProvider" section to ${configFile}:
 
   {
     "modelProvider": {
@@ -130,7 +116,7 @@ Add a "modelProvider" section to ${path}:
     }
   }
 
-"provider" is one of ${providerNames.join(", ")}. The API key comes from "apiKey", the variable named in "apiKeyEnv",
+"provider" is one of ${modelProviderNames.join(", ")}. The API key comes from "apiKey", the variable named in "apiKeyEnv",
 SESSIONLORE_API_KEY or the provider's own variable (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY);
 Ollama needs none. SESSIONLORE_PROVIDER, SESSIONLORE_CHEAP_MODEL, SESSIONLORE_STRONG_MODEL and SESSIONLORE_BASE_URL
 override the file.

@@ -1,7 +1,6 @@
-import { writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
-import { runCli } from "./support/harness.js";
+import { runCli, writeConfig } from "./support/harness.js";
 import { scriptedModelProvider } from "./support/model-provider.js";
 
 let home: FixtureHome;
@@ -31,11 +30,9 @@ describe("analyze without a Model Provider", () => {
   });
 
   it("names the missing API key when the config file chooses a provider that needs one", async () => {
-    home.folder(".sessionlore");
-    writeFileSync(
-      home.resolve(".sessionlore/config.json"),
-      JSON.stringify({ modelProvider: { provider: "anthropic", cheapModel: "claude-haiku-4-5", strongModel: "claude-sonnet-4-5" } }),
-    );
+    writeConfig(home, {
+      modelProvider: { provider: "anthropic", cheapModel: "claude-haiku-4-5", strongModel: "claude-sonnet-4-5" },
+    });
 
     const analyze = await runCli(home, ["analyze"]);
 
