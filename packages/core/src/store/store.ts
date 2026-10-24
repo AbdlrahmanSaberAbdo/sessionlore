@@ -453,15 +453,79 @@ export class Store {
         let cluster: number;
         if ("cluster" in placement) cluster = placement.cluster;
         else {
-          cluster =
-            created.get(placement.newCluster) ??
-            this.db.run("INSERT INTO clusters (created_at) VALUES (?)", at.toISOString()).lastInsertRowid;
+          cluster = created.get(placement.newCluster) ?? this.newCluster(at);
           created.set(placement.newCluster, cluster);
         }
         this.db.run("UPDATE tasks SET cluster_id = ? WHERE id = ?", cluster, placement.task);
       }
       this.db.run("DELETE FROM clusters WHERE id NOT IN (SELECT cluster_id FROM tasks WHERE cluster_id IS NOT NULL)");
     });
+  }
+
+  /** Every Task with a `modelId` embedding and the Cluster it is in now, oldest Session first. */
+  embeddedTasks(modelId: string): { key: number; vector: number[]; cluster: number | null }[] {
+    return this.db
+      .all<{ id: number; embedding: Uint8Array; cluster_id: number | null }>(
+        `SELECT t.id, t.embedding, t.cluster_id FROM tasks t JOIN sessions s ON s.id = t.session_id
+          WHERE t.embedding IS NOT NULL AND t.embedding_model = ?
+          ORDER BY s.started_at, s.id, t.position`,
+        modelId,
+      )
+      .map((t) => ({ key: t.id, vector: decodeVector(t.embedding), cluster: t.cluster_id }));
+  }
+
+  /**
+   * Replaces every Cluster with `groups` (ADR 0008). A group with an `heir`
+   * keeps that Cluster's id and name; the others become new Clusters. Each
+   * old Cluster that is no group's heir is folded into the group it maps to
+   * (`targets`): rows that point at it are re-pointed and its id redirects
+   * there. Tasks in no group are left unclustered. Returns each group's id.
+   */
+  recluster(
+    groups: readonly { heir: number | undefined; tasks: readonly number[] }[],
+    targets: ReadonlyMap<number, number>,
+    at: Date,
+  ): number[] {
+    return this.db.transaction(() => {
+      const ids = groups.map((g) => g.heir ?? this.newCluster(at));
+      this.db.run("UPDATE tasks SET cluster_id = NULL");
+      groups.forEach((g, i) => {
+        for (const task of g.tasks) this.db.run("UPDATE tasks SET cluster_id = ? WHERE id = ?", ids[i]!, task);
+      });
+      const heirs = new Set(groups.map((g) => g.heir));
+      const references = this.db.all<{ tbl: string; col: string }>(
+        `SELECT m.name AS tbl, f."from" AS col FROM sqlite_master m, pragma_foreign_key_list(m.name) f
+          WHERE m.type = 'table' AND f."table" = 'clusters' AND m.name NOT IN ('tasks', 'cluster_redirects')`,
+      );
+      for (const [old, group] of targets) {
+        if (heirs.has(old)) continue;
+        const to = ids[group]!;
+        for (const { tbl, col } of references) this.db.run(`UPDATE "${tbl}" SET "${col}" = ? WHERE "${col}" = ?`, to, old);
+        this.db.run("UPDATE cluster_redirects SET new_id = ? WHERE new_id = ?", to, old);
+        this.db.run("INSERT OR REPLACE INTO cluster_redirects (old_id, new_id) VALUES (?, ?)", old, to);
+      }
+      this.db.run("DELETE FROM clusters WHERE id NOT IN (SELECT cluster_id FROM tasks WHERE cluster_id IS NOT NULL)");
+      return ids;
+    });
+  }
+
+  /** Adds an empty Cluster. Ids are never reused, so an id that once named a Cluster, or redirects, names nothing else. */
+  private newCluster(at: Date): number {
+    return this.db.run(
+      `INSERT INTO clusters (id, created_at) VALUES (
+         (SELECT MAX(id) FROM (SELECT MAX(id) AS id FROM clusters UNION ALL SELECT MAX(old_id) FROM cluster_redirects)) + 1, ?)`,
+      at.toISOString(),
+    ).lastInsertRowid;
+  }
+
+  /** The id a Cluster has now: itself, or the Cluster a re-cluster folded it into. Null if neither exists. */
+  resolveCluster(id: number): number | null {
+    const row = this.db.get<{ id: number }>(
+      "SELECT id FROM clusters WHERE id = ? UNION ALL SELECT new_id AS id FROM cluster_redirects WHERE old_id = ? LIMIT 1",
+      id,
+      id,
+    );
+    return row?.id ?? null;
   }
 
   /** Clusters the cheap model has not named yet that have at least `minTasks` Tasks, with their Task titles. */

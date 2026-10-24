@@ -117,6 +117,17 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX tasks_cluster ON tasks (cluster_id);
     `,
   },
+  {
+    version: 6,
+    name: "cluster redirects",
+    sql: `
+      -- A Cluster a re-cluster folded into another (ADR 0008): its old id keeps resolving to the Cluster it mapped to.
+      CREATE TABLE cluster_redirects (
+        old_id  INTEGER PRIMARY KEY,
+        new_id  INTEGER NOT NULL REFERENCES clusters(id) ON DELETE CASCADE
+      );
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

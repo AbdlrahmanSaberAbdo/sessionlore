@@ -10,9 +10,11 @@ import {
   nameCluster,
   placeTasks,
   splitIntoTasks,
+  succession,
   taskEmbeddingText,
   taskSplitPrompt,
   type RepeatRule,
+  type RepeatRuleResult,
   type TokenCount,
 } from "@sessionlore/analysis";
 import { costUsd, type Prices } from "./pricing.js";
@@ -20,6 +22,7 @@ import {
   Store,
   type ClusterTask,
   type SessionTasks,
+  type StoredCluster,
   type StoredSession,
   type StoredSessionDetail,
 } from "./store/store.js";
@@ -69,6 +72,20 @@ export interface WorkflowsResult {
   repeatRule: RepeatRule;
   workflows: ClusterView[];
   nearWorkflows: NearWorkflowView[];
+}
+
+/** What `recluster` changed: where each old Cluster went, and which Clusters are new. */
+export interface ReclusterResult {
+  mapped: { from: ClusterRef; to: ClusterRef }[];
+  /** New Clusters that took over from no old one. */
+  created: ClusterRef[];
+  /** Tokens spent naming the new Clusters. */
+  usage: ModelUsage[];
+}
+
+export interface ClusterRef {
+  id: number;
+  name: string;
 }
 
 export interface HarnessScanResult {
@@ -299,6 +316,17 @@ export class App {
     usage: UsageTally,
     signal: AbortSignal | undefined,
   ): Promise<void> {
+    await this.embedTasks(embedder);
+    const placements = placeTasks(
+      this.store.clusterVectors(embedder.modelId),
+      this.store.unclusteredTasks(embedder.modelId).map((t) => ({ task: t.key, vector: t.vector })),
+    );
+    this.store.placeTasks(placements, this.deps.clock.now());
+    await this.nameClusters(model, usage, signal);
+  }
+
+  /** Embeds every Task not yet embedded with `embedder`'s model. */
+  private async embedTasks(embedder: Embedder): Promise<void> {
     const toEmbed = this.store.tasksToEmbed(embedder.modelId);
     for (let i = 0; i < toEmbed.length; i += EMBED_BATCH) {
       const batch = toEmbed.slice(i, i + EMBED_BATCH);
@@ -308,12 +336,9 @@ export class App {
         batch.map((t, j) => ({ key: t.key, vector: vectors[j]! })),
       );
     }
-    const placements = placeTasks(
-      this.store.clusterVectors(embedder.modelId),
-      this.store.unclusteredTasks(embedder.modelId).map((t) => ({ task: t.key, vector: t.vector })),
-    );
-    this.store.placeTasks(placements, this.deps.clock.now());
+  }
 
+  private async nameClusters(model: ModelProvider["cheap"], usage: UsageTally, signal: AbortSignal | undefined): Promise<void> {
     // A Cluster can only be listed once it has this many Tasks, so smaller ones need no name yet.
     const showable = Math.min(NEAR_WORKFLOW_MIN_TASKS, this.repeatRule.minMembers);
     for (const cluster of this.store.unnamedClusters(showable)) {
@@ -329,31 +354,52 @@ export class App {
     }
   }
 
+  /**
+   * Rebuilds every Cluster from scratch (ADR 0008), then maps each old Cluster
+   * onto the new one holding most of its Tasks. A new Cluster that takes over
+   * from an old one keeps its id and name, and anything attached to an old
+   * Cluster follows it to the Cluster it mapped to.
+   */
+  async recluster(options: { signal?: AbortSignal } = {}): Promise<ReclusterResult> {
+    const embedder = this.deps.embedder;
+    if (!embedder) throw new Error("Re-clustering needs the local Embedder, which is not available.");
+    const before = new Map(this.store.listClusters().map((c) => [c.id, clusterName(c)]));
+    await this.embedTasks(embedder);
+    const tasks = this.store.embeddedTasks(embedder.modelId);
+    const groups: number[][] = [];
+    for (const placement of placeTasks([], tasks.map((t) => ({ task: t.key, vector: t.vector })))) {
+      if ("newCluster" in placement) (groups[placement.newCluster] ??= []).push(placement.task);
+    }
+    const oldCluster = new Map(tasks.map((t) => [t.key, t.cluster ?? undefined]));
+    const { heirs, targets } = succession(groups, (task: number) => oldCluster.get(task));
+    const ids = this.store.recluster(
+      groups.map((tasks, i) => ({ heir: heirs[i], tasks })),
+      targets,
+      this.deps.clock.now(),
+    );
+
+    const usage = new UsageTally(this.deps.prices);
+    if (this.deps.modelProvider) await this.nameClusters(this.deps.modelProvider.cheap, usage, options.signal);
+    const after = new Map(this.store.listClusters().map((c) => [c.id, clusterName(c)]));
+    const ref = (id: number) => ({ id, name: after.get(id)! });
+    return {
+      mapped: [...targets]
+        .sort(([a], [b]) => a - b)
+        .map(([old, group]) => ({ from: { id: old, name: before.get(old)! }, to: ref(ids[group]!) })),
+      created: ids.filter((_, i) => heirs[i] === undefined).map(ref),
+      usage: usage.byModel(),
+    };
+  }
+
   /** Clusters that pass the Repeat Rule now, and those close to passing. */
   listWorkflows(): WorkflowsResult {
     const rule = this.repeatRule;
     const now = this.deps.clock.now();
     const result: WorkflowsResult = { repeatRule: rule, workflows: [], nearWorkflows: [] };
     for (const cluster of this.store.listClusters()) {
-      const tasks = cluster.tasks.filter((t) =>
-        this.projectFilter.allows(t.project && { root: t.project.path, name: t.project.name }),
-      );
-      if (tasks.length === 0) continue;
-      const verdict = applyRepeatRule(
-        tasks.map((t) => ({ session: t.session, at: new Date(t.at) })),
-        rule,
-        now,
-      );
-      const sessions = new Map<string, ClusterView["sessions"][number]>();
-      for (const t of tasks) if (!sessions.has(t.session)) sessions.set(t.session, { id: t.session, harness: t.harness, project: t.project });
-      const view: ClusterView = {
-        id: cluster.id,
-        name: cluster.name ?? tasks[0]!.title,
-        tasks,
-        sessions: [...sessions.values()],
-        harnesses: [...new Set(tasks.map((t) => t.harness))],
-        counted: { tasks: verdict.counted.members, sessions: verdict.counted.sessions },
-      };
+      const judged = this.clusterView(cluster, now);
+      if (!judged) continue;
+      const { view, verdict } = judged;
       if (verdict.passes) result.workflows.push(view);
       else if (verdict.counted.members >= Math.min(NEAR_WORKFLOW_MIN_TASKS, rule.minMembers)) {
         result.nearWorkflows.push({ ...view, needs: { tasks: verdict.needs.members, sessions: verdict.needs.sessions } });
@@ -363,6 +409,38 @@ export class App {
     result.workflows.sort(busiestFirst);
     result.nearWorkflows.sort(busiestFirst);
     return result;
+  }
+
+  /**
+   * One Cluster, whether or not it passes the Repeat Rule. The id may be one a
+   * re-cluster retired; it then shows the Cluster that id mapped to. Null if
+   * no Cluster has or had that id, or none of its Tasks may be shown.
+   */
+  getWorkflow(id: number): ClusterView | null {
+    const current = this.store.resolveCluster(id);
+    const cluster = current === null ? undefined : this.store.listClusters().find((c) => c.id === current);
+    return (cluster && this.clusterView(cluster, this.deps.clock.now())?.view) ?? null;
+  }
+
+  private clusterView(cluster: StoredCluster, now: Date): { view: ClusterView; verdict: RepeatRuleResult } | null {
+    const tasks = cluster.tasks.filter((t) => this.projectFilter.allows(t.project && { root: t.project.path, name: t.project.name }));
+    if (tasks.length === 0) return null;
+    const verdict = applyRepeatRule(
+      tasks.map((t) => ({ session: t.session, at: new Date(t.at) })),
+      this.repeatRule,
+      now,
+    );
+    const sessions = new Map<string, ClusterView["sessions"][number]>();
+    for (const t of tasks) if (!sessions.has(t.session)) sessions.set(t.session, { id: t.session, harness: t.harness, project: t.project });
+    const view: ClusterView = {
+      id: cluster.id,
+      name: cluster.name ?? tasks[0]!.title,
+      tasks,
+      sessions: [...sessions.values()],
+      harnesses: [...new Set(tasks.map((t) => t.harness))],
+      counted: { tasks: verdict.counted.members, sessions: verdict.counted.sessions },
+    };
+    return { view, verdict };
   }
 
   /** The redacted text Analysis would send for a Session, or null if no Session has that id. */
@@ -384,6 +462,11 @@ const EMBED_BATCH = 32;
 
 /** A Cluster that fails the Repeat Rule is a near-Workflow once it has this many Tasks inside the window. */
 const NEAR_WORKFLOW_MIN_TASKS = 2;
+
+/** A Cluster's name, or its first Task's title until the cheap model has named it. */
+function clusterName(cluster: StoredCluster): string {
+  return cluster.name ?? cluster.tasks[0]!.title;
+}
 
 function unrecognizedWarnings(adapter: Adapter, tally: Map<string, number>): string[] {
   if (tally.size === 0) return [];

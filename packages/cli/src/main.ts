@@ -183,6 +183,36 @@ const commands: Record<string, Command> = {
       }
     },
   },
+  workflow: {
+    summary: "Show one Workflow or Cluster with its Tasks: workflow <id>",
+    run({ app, json, args, out }) {
+      const [id] = args;
+      if (!id || !/^\d+$/.test(id)) throw new Error("Which Workflow? Usage: sessionlore workflow <id>");
+      const workflow = app.getWorkflow(Number(id));
+      if (!workflow) throw new Error(`No Workflow has id ${id}. Run \`sessionlore workflows\` to list them.`);
+      if (json) return out(JSON.stringify({ workflow }, null, 2) + "\n");
+      out(`${workflow.name}  (${workflow.counted.tasks} Tasks in ${workflow.counted.sessions} Sessions)\n`);
+      for (const t of workflow.tasks) out(`  ${t.at.slice(0, 10)}  ${t.harness}  ${t.title}\n`);
+    },
+  },
+  recluster: {
+    summary: "Rebuild every Cluster from scratch, mapping old Workflows onto the new ones",
+    async run({ app, json, signal, out }) {
+      const result = await app.recluster({ signal });
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      if (result.mapped.length === 0 && result.created.length === 0) {
+        return out("No Clusters yet. Run `sessionlore analyze` first.\n");
+      }
+      for (const { from, to } of result.mapped) {
+        out(from.id === to.id ? `${from.name}: kept\n` : `${from.name} -> ${to.name}\n`);
+      }
+      for (const c of result.created) out(`New: ${c.name}\n`);
+      for (const { model, tokens, costUsd } of result.usage) {
+        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
+        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+      }
+    },
+  },
   sessions: {
     summary: "List stored Sessions",
     run({ app, json, out }) {

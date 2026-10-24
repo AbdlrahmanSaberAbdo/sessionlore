@@ -58,6 +58,48 @@ export function placeTasks<K, T>(
   });
 }
 
+/**
+ * How a grouping rebuilt from scratch takes over from the old Clusters (ADR 0008).
+ * Each old Cluster maps to the new group holding most of its Tasks. Each new
+ * group keeps the identity of the old Cluster, among those mapped to it, that
+ * shares the most Tasks with it; a new group no old Cluster passes its identity
+ * to is a new Cluster. Ties go to whichever comes first in the groups' order.
+ */
+export interface Succession<K> {
+  /** Per new group, by index: the old Cluster whose identity it keeps, if any. */
+  heirs: (K | undefined)[];
+  /** Per old Cluster: the index of the new group it maps to. */
+  targets: Map<K, number>;
+}
+
+export function succession<K, T>(groups: readonly (readonly T[])[], oldClusterOf: (task: T) => K | undefined): Succession<K> {
+  const overlap = groups.map((tasks) => {
+    const counts = new Map<K, number>();
+    for (const task of tasks) {
+      const old = oldClusterOf(task);
+      if (old !== undefined) counts.set(old, (counts.get(old) ?? 0) + 1);
+    }
+    return counts;
+  });
+  const targets = new Map<K, number>();
+  const best = new Map<K, number>();
+  overlap.forEach((counts, group) => {
+    for (const [old, n] of counts) {
+      if (n <= (best.get(old) ?? 0)) continue;
+      best.set(old, n);
+      targets.set(old, group);
+    }
+  });
+  const heirs = overlap.map((counts, group) => {
+    let heir: K | undefined;
+    for (const [old, n] of counts) {
+      if (targets.get(old) === group && (heir === undefined || n > counts.get(heir)!)) heir = old;
+    }
+    return heir;
+  });
+  return { heirs, targets };
+}
+
 function sumOf(vectors: readonly (readonly number[])[]): number[] {
   const sum = new Array<number>(vectors[0]!.length).fill(0);
   for (const v of vectors) addInto(sum, v);

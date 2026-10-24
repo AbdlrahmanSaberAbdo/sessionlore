@@ -20,6 +20,8 @@ export {
   type HarnessScanResult,
   type ClusterView,
   type NearWorkflowView,
+  type ClusterRef,
+  type ReclusterResult,
   type WorkflowsResult,
 } from "./app.js";
 export { systemClock, type Clock, type Embedder, type Env, type ModelProvider, type ModelProviderModel } from "./ports.js";
