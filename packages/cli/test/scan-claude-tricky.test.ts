@@ -40,4 +40,37 @@ describe("scan of Claude Code Sessions: the tricky cases", () => {
     expect(session.assistantTurnCount).toBe(1);
     expect(session.tokens).toEqual({ input: 100, output: 50, cacheCreation: 200, cacheRead: 1000 });
   });
+
+  it("attaches a subagent transcript to its parent Session without counting the subagent's prompts", async () => {
+    const repo = home.gitRepo("code/shop");
+    const parent = writeClaudeSession(home, {
+      cwd: repo,
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [
+        turn.user("find where prices are rounded"),
+        turn.subagent({
+          description: "Search for rounding",
+          prompt: "Find every place prices are rounded and report file paths.",
+          turns: [
+            turn.tool("Grep", { pattern: "round" }, "src/price.ts"),
+            turn.user("Also check the tests folder."),
+            turn.assistant("Rounding happens in src/price.ts.", { input_tokens: 7, output_tokens: 3 }),
+          ],
+          result: "Rounding happens in src/price.ts.",
+        }),
+        turn.assistant("Prices are rounded in src/price.ts."),
+      ],
+    });
+
+    const sessions = await scanAndList();
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      id: parent.id,
+      userMessageCount: 1,
+      subagentRunCount: 1,
+      // Parent: the Agent tool call and the final reply (10/20 each). Subagent: Grep call (10/20) and reply (7/3).
+      tokens: { input: 37, output: 63 },
+    });
+  });
 });

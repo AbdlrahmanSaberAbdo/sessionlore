@@ -42,6 +42,9 @@ export interface HarnessSession {
   userMessages: HarnessUserMessage[];
   /** Assistant replies in the conversation, one per API message however the Harness splits it. */
   assistantTurnCount: number;
+  /** Subagent runs started inside the Session; they belong to it, and their tokens are in `tokens`. */
+  subagentRunCount: number;
+  /** Tokens of the Session and its subagent runs. */
   tokens: TokenUsage;
 }
 

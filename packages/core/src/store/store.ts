@@ -22,6 +22,7 @@ export interface StoredSession {
   endedAt: string;
   userMessageCount: number;
   assistantTurnCount: number;
+  subagentRunCount: number;
   tokens: TokenUsage;
 }
 
@@ -72,7 +73,7 @@ export class Store {
         sessionId = existing.id;
         this.db.run(
           `UPDATE sessions SET project_id = ?, cwd = ?, started_at = ?, ended_at = ?,
-             scan_fingerprint = ?, last_scan_id = ?, assistant_turn_count = ?,
+             scan_fingerprint = ?, last_scan_id = ?, assistant_turn_count = ?, subagent_run_count = ?,
              input_tokens = ?, output_tokens = ?, cache_creation_tokens = ?, cache_read_tokens = ?
            WHERE id = ?`,
           projectId,
@@ -88,8 +89,8 @@ export class Store {
       } else {
         sessionId = this.db.run(
           `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, scan_fingerprint, last_scan_id,
-             assistant_turn_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             assistant_turn_count, subagent_run_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           harness,
           session.externalId,
           projectId,
@@ -125,13 +126,14 @@ export class Store {
       ended_at: string;
       user_message_count: number;
       assistant_turn_count: number;
+      subagent_run_count: number;
       input_tokens: number;
       output_tokens: number;
       cache_creation_tokens: number;
       cache_read_tokens: number;
     }>(
       `SELECT s.external_id, s.harness, p.name AS project_name, p.root AS project_root,
-              s.started_at, s.ended_at, s.assistant_turn_count,
+              s.started_at, s.ended_at, s.assistant_turn_count, s.subagent_run_count,
               s.input_tokens, s.output_tokens, s.cache_creation_tokens, s.cache_read_tokens,
               (SELECT COUNT(*) FROM user_messages m WHERE m.session_id = s.id) AS user_message_count
          FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
@@ -145,6 +147,7 @@ export class Store {
       endedAt: row.ended_at,
       userMessageCount: Number(row.user_message_count),
       assistantTurnCount: Number(row.assistant_turn_count),
+      subagentRunCount: Number(row.subagent_run_count),
       tokens: {
         input: Number(row.input_tokens),
         output: Number(row.output_tokens),
@@ -165,5 +168,5 @@ export class Store {
 /** The per-Session summary columns, in the order the session queries list them. */
 function summaryValues(session: HarnessSession): number[] {
   const { tokens } = session;
-  return [session.assistantTurnCount, tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead];
+  return [session.assistantTurnCount, session.subagentRunCount, tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead];
 }
