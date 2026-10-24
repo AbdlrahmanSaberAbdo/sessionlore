@@ -204,6 +204,23 @@ export const migrations: readonly Migration[] = [
   },
   {
     version: 10,
+    name: "skill uses",
+    sql: `
+      -- Skills the agent loaded in a Session, read by Scan; matched to Accepted Suggestions when shown.
+      CREATE TABLE skill_uses (
+        id          INTEGER PRIMARY KEY,
+        session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        position    INTEGER NOT NULL,
+        name        TEXT NOT NULL,
+        base_dir    TEXT,
+        used_at     TEXT NOT NULL,
+        UNIQUE (session_id, position)
+      );
+      CREATE INDEX skill_uses_name ON skill_uses (name);
+    `,
+  },
+  {
+    version: 11,
     name: "suggestion edits, Scope overrides and fingerprints",
     sql: `
       -- Set when the person edited the Suggestion's content.

@@ -78,6 +78,8 @@ export interface ClusterTask {
   project: { name: string; path: string } | null;
   /** When the Task started: its first User Message's timestamp. */
   at: string;
+  /** How many of the Task's User Messages are Corrections. */
+  corrections: number;
 }
 
 /** Workflows' Clusters of Tasks, or Correction Clusters of Corrections. */
@@ -162,6 +164,15 @@ export interface StoredCorrectionCluster {
   corrections: ClusterCorrection[];
 }
 
+export interface StoredSkillUse {
+  /** The folder the Skill was loaded from, if the Harness recorded it. */
+  baseDir: string | null;
+  at: string;
+  /** Id of the Session it was used in. */
+  session: string;
+  harness: HarnessId;
+}
+
 export interface SaveSessionInput {
   harness: HarnessId;
   session: HarnessSession;
@@ -235,6 +246,7 @@ export class Store {
         this.db.run("DELETE FROM user_messages WHERE session_id = ?", sessionId);
         this.db.run("DELETE FROM messages WHERE session_id = ?", sessionId);
         this.db.run("DELETE FROM tasks WHERE session_id = ?", sessionId);
+        this.db.run("DELETE FROM skill_uses WHERE session_id = ?", sessionId);
       } else {
         sessionId = this.db.run(
           `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, scan_fingerprint, last_scan_id,
@@ -262,6 +274,16 @@ export class Store {
         );
       });
       (session.messages ?? []).forEach((message, position) => this.insertMessage(sessionId, position, message));
+      (session.skillUses ?? []).forEach((use, position) => {
+        this.db.run(
+          "INSERT INTO skill_uses (session_id, position, name, base_dir, used_at) VALUES (?, ?, ?, ?, ?)",
+          sessionId,
+          position,
+          use.name,
+          use.baseDir,
+          use.timestamp.toISOString(),
+        );
+      });
       return { added: !existing };
     });
   }
@@ -663,10 +685,12 @@ export class Store {
       project_name: string | null;
       project_root: string | null;
       at: string;
+      corrections: number;
     }>(
       `SELECT c.id AS cluster_id, c.name, t.title, t.position, s.external_id AS session_id, s.harness,
               p.name AS project_name, p.root AS project_root,
-              COALESCE((SELECT MIN(m.timestamp) FROM user_messages m WHERE m.task_id = t.id), s.started_at) AS at
+              COALESCE((SELECT MIN(m.timestamp) FROM user_messages m WHERE m.task_id = t.id), s.started_at) AS at,
+              (SELECT COUNT(*) FROM user_messages m WHERE m.task_id = t.id AND m.intent = 'Correction') AS corrections
          FROM clusters c
          JOIN tasks t ON t.cluster_id = c.id
          JOIN sessions s ON s.id = t.session_id
@@ -682,6 +706,7 @@ export class Store {
         harness: row.harness as HarnessId,
         project: row.project_root && row.project_name ? { name: row.project_name, path: row.project_root } : null,
         at: row.at,
+        corrections: Number(row.corrections),
       });
     }
     return [...clusters.values()];
@@ -701,6 +726,37 @@ export class Store {
         position,
       )
       .map((m) => ({ text: m.text, intent: m.intent as Intent }));
+  }
+
+  /** Every analyzed Task with when it started and how many Corrections it has, oldest first. */
+  taskCorrections(): { at: string; corrections: number; project: { name: string; path: string } | null }[] {
+    return this.db
+      .all<{ at: string; corrections: number; project_name: string | null; project_root: string | null }>(
+        `SELECT COALESCE((SELECT MIN(m.timestamp) FROM user_messages m WHERE m.task_id = t.id), s.started_at) AS at,
+                (SELECT COUNT(*) FROM user_messages m WHERE m.task_id = t.id AND m.intent = 'Correction') AS corrections,
+                p.name AS project_name, p.root AS project_root
+           FROM tasks t JOIN sessions s ON s.id = t.session_id
+           LEFT JOIN projects p ON p.id = s.project_id
+          ORDER BY at, t.id`,
+      )
+      .map((t) => ({
+        at: t.at,
+        corrections: Number(t.corrections),
+        project: t.project_root && t.project_name ? { name: t.project_name, path: t.project_root } : null,
+      }));
+  }
+
+  /** Every Skill use Scan found named `name`, oldest first. */
+  skillUses(name: string): StoredSkillUse[] {
+    return this.db
+      .all<{ base_dir: string | null; used_at: string; session_id: string; harness: string }>(
+        `SELECT u.base_dir, u.used_at, s.external_id AS session_id, s.harness
+           FROM skill_uses u JOIN sessions s ON s.id = u.session_id
+          WHERE u.name = ?
+          ORDER BY u.used_at, u.id`,
+        name,
+      )
+      .map((u) => ({ baseDir: u.base_dir, at: u.used_at, session: u.session_id, harness: u.harness as HarnessId }));
   }
 
   /** Stores a new Pending Suggestion, removing the one it `replaces` if any, and returns its id. */

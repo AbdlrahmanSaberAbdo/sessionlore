@@ -80,7 +80,7 @@ export function defaultScope(evidence: readonly Pick<Evidence, "project">[]): Sc
 /**
  * A Suggestion's fingerprint: one key per Task (for a Skill) or Correction
  * (for a Rule) it was derived from, stable across Analyses and re-clusters.
- * Migration 10 backfills the same keys from stored Evidence.
+ * Migration 11 backfills the same keys from stored Evidence.
  */
 export function evidenceFingerprint(evidence: readonly Evidence[]): string[] {
   return evidence.map(
