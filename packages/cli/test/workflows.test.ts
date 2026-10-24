@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { bubble, FixtureHome, turn, writeClaudeSession, writeCursorDatabase } from "@sessionlore/fixtures";
 import { topicEmbedder } from "./support/embedder.js";
 import { fixedClock, runCli, writeConfig, type RunOptions } from "./support/harness.js";
 import { scriptedModelProvider } from "./support/model-provider.js";
@@ -167,5 +167,33 @@ describe("workflows", () => {
     expect(result.stderr).toContain("repeatRule.minMembers");
   });
 
-  it.todo("groups Tasks from Claude Code and Cursor Sessions into one Workflow (needs the Cursor fixtures from #4)");
+  it("groups Tasks from Claude Code and Cursor Sessions into one Workflow", async () => {
+    const repo = home.gitRepo("code/shop");
+    const claude = session("2026-05-10T09:00:00.000Z", "write a database migration for orders");
+    const {
+      composerIds: [cursor],
+    } = writeCursorDatabase(home, [
+      {
+        folder: repo,
+        createdAt: "2026-05-20T09:00:00.000Z",
+        bubbles: [
+          bubble.user("add a database migration for users"),
+          bubble.assistant("Done."),
+          bubble.user("database migration for the cart table"),
+          bubble.assistant("Done."),
+        ],
+      },
+    ]);
+    const provider = oneTaskPerMessage(() => "Write database migrations");
+    const options = { modelProvider: provider.modelProvider, embedder: topicEmbedder(["database migration"]), clock: now };
+
+    await analyze(options);
+    const [workflow] = (await workflows(options)).workflows;
+
+    expect(workflow.harnesses).toEqual(["claude-code", "cursor"]);
+    expect(workflow.sessions).toEqual([
+      { id: claude.id, harness: "claude-code", project: { name: "shop", path: repo } },
+      { id: cursor, harness: "cursor", project: { name: "shop", path: repo } },
+    ]);
+  });
 });
