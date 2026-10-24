@@ -23,6 +23,8 @@ interface CommandContext {
   /** Positional arguments after the command name. */
   args: string[];
   out(text: string): void;
+  /** Writes to stderr: warnings and problems, kept out of `--json` stdout. */
+  err(text: string): void;
 }
 
 interface Command {
@@ -33,8 +35,11 @@ interface Command {
 const commands: Record<string, Command> = {
   scan: {
     summary: "Read Sessions from every Harness on this machine into the local store",
-    async run({ app, json, out }) {
+    async run({ app, json, out, err }) {
       const result = await app.scan();
+      for (const harness of result.harnesses) {
+        for (const warning of harness.warnings) err(`Warning: ${harness.name}: ${warning.count} × ${warning.message}\n`);
+      }
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       for (const harness of result.harnesses) {
         out(`${harness.name}: ${harness.added} ${plural(harness.added, "Session")} added, ${harness.updated} updated\n`);
@@ -118,7 +123,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider: io.modelProvider,
       embedder: io.embedder,
     });
-    await command.run({ app, json: parsed.values.json ?? false, args, out: io.stdout });
+    await command.run({ app, json: parsed.values.json ?? false, args, out: io.stdout, err: io.stderr });
     return 0;
   } catch (error) {
     io.stderr(`sessionlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);

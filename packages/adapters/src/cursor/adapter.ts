@@ -8,6 +8,7 @@ import {
   type HarnessSession,
   type HarnessUserMessage,
   type ReadOnlyDatabase,
+  type ScanWarnings,
   type SessionSource,
 } from "@sessionlore/core";
 
@@ -50,10 +51,15 @@ export const cursorAdapter: Adapter = {
     }
   },
 
-  async readSession(source: SessionSource): Promise<HarnessSession | null> {
-    return withDatabase(source.location, (db) => readComposer(db, source.externalId));
+  async readSession(source: SessionSource, warnings: ScanWarnings): Promise<HarnessSession | null> {
+    return withDatabase(source.location, (db) => readComposer({ db, warnings }, source.externalId));
   },
 };
+
+/** Highest `_v` of `composerData:*` values this Adapter was written against. */
+const KNOWN_COMPOSER_VERSION = 18;
+/** Highest `_v` of `bubbleId:*` values this Adapter was written against. */
+const KNOWN_BUBBLE_VERSION = 3;
 
 type Json = Record<string, unknown>;
 /** How node:sqlite returns a BLOB-declared column. */
@@ -63,6 +69,11 @@ type SqlBlob = string | Uint8Array | null;
 interface ThreadEntry {
   message: HarnessMessage;
   toolCallId: string | null;
+}
+
+interface Reader {
+  db: ReadOnlyDatabase;
+  warnings: ScanWarnings;
 }
 
 interface SubagentHeader {
@@ -80,12 +91,13 @@ function withDatabase<T>(path: string, fn: (db: ReadOnlyDatabase) => T): T {
   }
 }
 
-function readComposer(db: ReadOnlyDatabase, composerId: string): HarnessSession | null {
+function readComposer(reader: Reader, composerId: string): HarnessSession | null {
+  const { db } = reader;
   const head = parseJson(db.get<{ value: SqlBlob }>("SELECT value FROM composerHeaders WHERE composerId = ?", composerId)?.value);
-  const data = readComposerData(db, composerId);
+  const data = readComposerData(reader, composerId);
   if (!head || !data || head.isDraft === true) return null;
 
-  const messages = readThread(db, composerId, data, null, new Set([composerId]));
+  const messages = readThread(reader, composerId, data, null, new Set([composerId]));
   const userMessages: HarnessUserMessage[] = [];
   let startedAt: Date | null = null;
   let endedAt: Date | null = null;
@@ -111,8 +123,20 @@ function readComposer(db: ReadOnlyDatabase, composerId: string): HarnessSession 
   };
 }
 
-function readComposerData(db: ReadOnlyDatabase, composerId: string): Json | null {
-  return parseJson(db.get<{ value: SqlBlob }>("SELECT value FROM cursorDiskKV WHERE key = ?", `composerData:${composerId}`)?.value);
+function readComposerData(reader: Reader, composerId: string): Json | null {
+  const data = parseJson(
+    reader.db.get<{ value: SqlBlob }>("SELECT value FROM cursorDiskKV WHERE key = ?", `composerData:${composerId}`)?.value,
+  );
+  if (data) checkVersion(reader, data, KNOWN_COMPOSER_VERSION, "composers");
+  return data;
+}
+
+/** Values newer than the Adapter knows are still read, as best possible, but never silently. */
+function checkVersion(reader: Reader, value: Json, known: number, what: string): void {
+  const version = value._v;
+  if (typeof version === "number" && version > known) {
+    reader.warnings.warn(`${what} in unknown format version ${version} (newest known: ${known}), read as best possible`);
+  }
 }
 
 /**
@@ -120,16 +144,16 @@ function readComposerData(db: ReadOnlyDatabase, composerId: string): Json | null
  * after the tool call that started it. Inside a subagent `subagent` is set, and
  * its type-1 bubbles count as assistant text: the parent agent wrote them, not the person.
  */
-function readThread(db: ReadOnlyDatabase, composerId: string, data: Json, subagent: string | null, seen: Set<string>): HarnessMessage[] {
-  const children = subagentsOf(db, composerId).filter((child) => !seen.has(child.composerId));
+function readThread(reader: Reader, composerId: string, data: Json, subagent: string | null, seen: Set<string>): HarnessMessage[] {
+  const children = subagentsOf(reader.db, composerId).filter((child) => !seen.has(child.composerId));
   const childThread = (child: SubagentHeader): HarnessMessage[] => {
     seen.add(child.composerId);
-    const childData = readComposerData(db, child.composerId);
-    return childData ? readThread(db, child.composerId, childData, child.typeName, seen) : [];
+    const childData = readComposerData(reader, child.composerId);
+    return childData ? readThread(reader, child.composerId, childData, child.typeName, seen) : [];
   };
 
   const messages: HarnessMessage[] = [];
-  for (const b of readBubbles(db, composerId, data)) {
+  for (const b of readBubbles(reader, composerId, data)) {
     const entry = toEntry(b, subagent);
     if (!entry) continue;
     messages.push(entry.message);
@@ -191,11 +215,11 @@ function toEntry(b: Json, subagent: string | null): ThreadEntry | null {
 }
 
 /** The composer's bubbles in conversation order, as listed in `fullConversationHeadersOnly`. */
-function readBubbles(db: ReadOnlyDatabase, composerId: string, data: Json): Json[] {
+function readBubbles(reader: Reader, composerId: string, data: Json): Json[] {
   const order = Array.isArray(data.fullConversationHeadersOnly) ? (data.fullConversationHeadersOnly as Json[]) : [];
   const prefix = `bubbleId:${composerId}:`;
   // A key range (';' sorts right after ':') uses the key index; LIKE may not.
-  const rows = db.all<{ key: string; value: SqlBlob }>(
+  const rows = reader.db.all<{ key: string; value: SqlBlob }>(
     "SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ?",
     prefix,
     `bubbleId:${composerId};`,
@@ -204,7 +228,9 @@ function readBubbles(db: ReadOnlyDatabase, composerId: string, data: Json): Json
   const bubbles: Json[] = [];
   for (const entry of order) {
     const value = parseJson(byId.get(String(entry.bubbleId)));
-    if (value) bubbles.push(value);
+    if (!value) continue;
+    checkVersion(reader, value, KNOWN_BUBBLE_VERSION, "message bubbles");
+    bubbles.push(value);
   }
   return bubbles;
 }

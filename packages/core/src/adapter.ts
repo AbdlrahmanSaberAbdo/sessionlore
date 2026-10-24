@@ -62,7 +62,16 @@ export interface Adapter {
   readonly displayName: string;
   /** Storage locations of this Harness that exist on this machine. */
   discover(ctx: HarnessContext): Promise<string[]>;
-  listSessions(storage: string): AsyncIterable<SessionSource>;
+  listSessions(storage: string, warnings: ScanWarnings): AsyncIterable<SessionSource>;
   /** Returns null when the source holds no conversation (e.g. an empty file). */
-  readSession(source: SessionSource): Promise<HarnessSession | null>;
+  readSession(source: SessionSource, warnings: ScanWarnings): Promise<HarnessSession | null>;
+}
+
+/**
+ * How an Adapter reports storage it does not fully understand (unknown record
+ * shapes, unknown format versions), so it is never skipped silently. Report one
+ * warning per affected item with the same message; Scan counts identical messages.
+ */
+export interface ScanWarnings {
+  warn(message: string): void;
 }

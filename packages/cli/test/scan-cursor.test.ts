@@ -172,8 +172,35 @@ describe("scan of Cursor Sessions", () => {
     writeCursorDatabase(home, [composers[0]!, { ...composers[1]!, bubbles: [bubble.user("two"), bubble.user("and more")] }]);
     const third = (await runCli(home, ["scan", "--json"])).json();
 
-    expect(first.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 2, updated: 0 }]);
-    expect(second.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 0, updated: 0 }]);
-    expect(third.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 0, updated: 1 }]);
+    expect(first.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 2, updated: 0, warnings: [] }]);
+    expect(second.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 0, updated: 0, warnings: [] }]);
+    expect(third.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 0, updated: 1, warnings: [] }]);
+  });
+
+  it("warns with a count about bubbles in an unknown format version, without crashing or dropping them silently", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeCursorDatabase(home, [
+      {
+        folder: repo,
+        createdAt: "2026-05-01T09:00:00.000Z",
+        bubbles: [
+          bubble.user("hi"),
+          bubble.assistant("hello", { version: 99 }),
+          bubble.user("more", { version: 99 }),
+        ],
+      },
+    ]);
+
+    const text = await runCli(home, ["scan"]);
+    expect(text.exitCode).toBe(0);
+    expect(text.stderr).toMatch(/Cursor.*2 .*unknown format version 99/i);
+
+    writeCursorDatabase(home, [
+      { folder: repo, createdAt: "2026-05-02T09:00:00.000Z", bubbles: [bubble.user("again", { version: 99 })] },
+    ]);
+    const json = (await runCli(home, ["scan", "--json"])).json();
+    expect(json.harnesses[0].warnings).toEqual([
+      { message: expect.stringMatching(/unknown format version 99/), count: 1 },
+    ]);
   });
 });
