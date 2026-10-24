@@ -100,6 +100,23 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 5,
+    name: "task embeddings and clusters",
+    sql: `
+      CREATE TABLE clusters (
+        id          INTEGER PRIMARY KEY,
+        -- Null until the cheap model has named it.
+        name        TEXT,
+        created_at  TEXT NOT NULL
+      );
+
+      ALTER TABLE tasks ADD COLUMN embedding BLOB;
+      ALTER TABLE tasks ADD COLUMN embedding_model TEXT;
+      ALTER TABLE tasks ADD COLUMN cluster_id INTEGER REFERENCES clusters(id) ON DELETE SET NULL;
+      CREATE INDEX tasks_cluster ON tasks (cluster_id);
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

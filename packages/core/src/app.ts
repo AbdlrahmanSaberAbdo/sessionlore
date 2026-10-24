@@ -2,9 +2,27 @@ import type { Adapter, HarnessContext, HarnessId, SessionSource } from "./adapte
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { ProjectFilter } from "./project-filter.js";
 import { resolveProject } from "./project.js";
-import { estimateTaskSplit, MalformedReplyError, splitIntoTasks, taskSplitPrompt, type TokenCount } from "@sessionlore/analysis";
+import {
+  applyRepeatRule,
+  defaultRepeatRule,
+  estimateTaskSplit,
+  MalformedReplyError,
+  nameCluster,
+  placeTasks,
+  splitIntoTasks,
+  taskEmbeddingText,
+  taskSplitPrompt,
+  type RepeatRule,
+  type TokenCount,
+} from "@sessionlore/analysis";
 import { costUsd, type Prices } from "./pricing.js";
-import { Store, type SessionTasks, type StoredSession, type StoredSessionDetail } from "./store/store.js";
+import {
+  Store,
+  type ClusterTask,
+  type SessionTasks,
+  type StoredSession,
+  type StoredSessionDetail,
+} from "./store/store.js";
 
 /**
  * The application interface. The CLI and the HTTP server are thin layers over
@@ -18,11 +36,39 @@ export interface AppDependencies {
   adapters: readonly Adapter[];
   clock: Clock;
   modelProvider?: ModelProvider;
+  /** Needed to cluster Tasks; without one, Analysis stops after splitting Sessions into Tasks. */
   embedder?: Embedder;
   /** Which Projects may be stored and shown. Defaults to all of them. */
   projectFilter?: ProjectFilter;
+  /** Defaults to 3 Tasks across 2 Sessions within 60 days. */
+  repeatRule?: RepeatRule;
   /** Model prices from the config, overriding the built-in ones. */
   prices?: Prices;
+}
+
+/** A Cluster as `workflows` shows it. Its id is stable across Analyses. */
+export interface ClusterView {
+  id: number;
+  name: string;
+  /** Every Task in the Cluster, oldest first, including those outside the Repeat Rule's window. */
+  tasks: ClusterTask[];
+  /** The distinct Sessions of those Tasks, in order of their first Task. */
+  sessions: { id: string; harness: HarnessId; project: { name: string; path: string } | null }[];
+  harnesses: HarnessId[];
+  /** Tasks and Sessions inside the Repeat Rule's window, which is what the rule counts. */
+  counted: { tasks: number; sessions: number };
+}
+
+/** A Cluster close to passing the Repeat Rule. */
+export interface NearWorkflowView extends ClusterView {
+  /** How many more Tasks and Sessions inside the window it needs to become a Workflow. */
+  needs: { tasks: number; sessions: number };
+}
+
+export interface WorkflowsResult {
+  repeatRule: RepeatRule;
+  workflows: ClusterView[];
+  nearWorkflows: NearWorkflowView[];
 }
 
 export interface HarnessScanResult {
@@ -233,8 +279,90 @@ export class App {
       }
       done += 1;
     }
+    if (this.deps.embedder && !signal?.aborted) await this.clusterTasks(this.deps.embedder, model, usage, signal);
     const interrupted = done < sessions.length;
     return { analyzed, failed, usage: usage.byModel(), interrupted, remaining: sessions.length - done };
+  }
+
+  private get repeatRule(): RepeatRule {
+    return this.deps.repeatRule ?? defaultRepeatRule;
+  }
+
+  /**
+   * Embeds Tasks locally, puts each new Task into the most similar Cluster or a
+   * new one (ADR 0008), and names Clusters big enough to be shown. Tasks left
+   * unclustered by an interruption are picked up by the next Analysis.
+   */
+  private async clusterTasks(
+    embedder: Embedder,
+    model: ModelProvider["cheap"],
+    usage: UsageTally,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const toEmbed = this.store.tasksToEmbed(embedder.modelId);
+    for (let i = 0; i < toEmbed.length; i += EMBED_BATCH) {
+      const batch = toEmbed.slice(i, i + EMBED_BATCH);
+      const vectors = await embedder.embed(batch.map((t) => taskEmbeddingText(t.title, t.firstMessage)));
+      this.store.saveEmbeddings(
+        embedder.modelId,
+        batch.map((t, j) => ({ key: t.key, vector: vectors[j]! })),
+      );
+    }
+    const placements = placeTasks(
+      this.store.clusterVectors(embedder.modelId),
+      this.store.unclusteredTasks(embedder.modelId).map((t) => ({ task: t.key, vector: t.vector })),
+    );
+    this.store.placeTasks(placements, this.deps.clock.now());
+
+    // A Cluster can only be listed once it has this many Tasks, so smaller ones need no name yet.
+    const showable = Math.min(NEAR_WORKFLOW_MIN_TASKS, this.repeatRule.minMembers);
+    for (const cluster of this.store.unnamedClusters(showable)) {
+      if (signal?.aborted) return;
+      try {
+        const { name, tokens } = await nameCluster(model, cluster.taskTitles, signal);
+        usage.add(model.modelId, tokens);
+        this.store.nameCluster(cluster.id, name);
+      } catch (error) {
+        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
+        // Left unnamed and retried by the next Analysis; listings fall back to a Task title meanwhile.
+      }
+    }
+  }
+
+  /** Clusters that pass the Repeat Rule now, and those close to passing. */
+  listWorkflows(): WorkflowsResult {
+    const rule = this.repeatRule;
+    const now = this.deps.clock.now();
+    const result: WorkflowsResult = { repeatRule: rule, workflows: [], nearWorkflows: [] };
+    for (const cluster of this.store.listClusters()) {
+      const tasks = cluster.tasks.filter((t) =>
+        this.projectFilter.allows(t.project && { root: t.project.path, name: t.project.name }),
+      );
+      if (tasks.length === 0) continue;
+      const verdict = applyRepeatRule(
+        tasks.map((t) => ({ session: t.session, at: new Date(t.at) })),
+        rule,
+        now,
+      );
+      const sessions = new Map<string, ClusterView["sessions"][number]>();
+      for (const t of tasks) if (!sessions.has(t.session)) sessions.set(t.session, { id: t.session, harness: t.harness, project: t.project });
+      const view: ClusterView = {
+        id: cluster.id,
+        name: cluster.name ?? tasks[0]!.title,
+        tasks,
+        sessions: [...sessions.values()],
+        harnesses: [...new Set(tasks.map((t) => t.harness))],
+        counted: { tasks: verdict.counted.members, sessions: verdict.counted.sessions },
+      };
+      if (verdict.passes) result.workflows.push(view);
+      else if (verdict.counted.members >= Math.min(NEAR_WORKFLOW_MIN_TASKS, rule.minMembers)) {
+        result.nearWorkflows.push({ ...view, needs: { tasks: verdict.needs.members, sessions: verdict.needs.sessions } });
+      }
+    }
+    const busiestFirst = (a: ClusterView, b: ClusterView) => b.counted.tasks - a.counted.tasks || a.id - b.id;
+    result.workflows.sort(busiestFirst);
+    result.nearWorkflows.sort(busiestFirst);
+    return result;
   }
 
   /** The redacted text Analysis would send for a Session, or null if no Session has that id. */
@@ -250,6 +378,12 @@ export class App {
       .filter((s) => this.projectFilter.allows(s.project && { root: s.project.path, name: s.project.name }));
   }
 }
+
+/** Texts embedded per Embedder call. */
+const EMBED_BATCH = 32;
+
+/** A Cluster that fails the Repeat Rule is a near-Workflow once it has this many Tasks inside the window. */
+const NEAR_WORKFLOW_MIN_TASKS = 2;
 
 function unrecognizedWarnings(adapter: Adapter, tally: Map<string, number>): string[] {
   if (tally.size === 0) return [];

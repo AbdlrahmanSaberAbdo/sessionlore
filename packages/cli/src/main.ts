@@ -159,6 +159,30 @@ const commands: Record<string, Command> = {
       }
     },
   },
+  workflows: {
+    summary: "List Workflows (Clusters of similar Tasks that pass the Repeat Rule) and near-Workflows",
+    run({ app, json, out }) {
+      const result = app.listWorkflows();
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      const { minMembers, minSessions, windowDays } = result.repeatRule;
+      out(`Repeat Rule: ${minMembers} Tasks across ${minSessions} Sessions within ${windowDays} days\n`);
+      if (result.workflows.length === 0 && result.nearWorkflows.length === 0) {
+        return out("No Workflows yet. Run `sessionlore analyze` after a few more Sessions.\n");
+      }
+      for (const w of result.workflows) {
+        out(`\n${w.name}  (${w.counted.tasks} Tasks in ${w.counted.sessions} Sessions)\n`);
+        for (const t of w.tasks) out(`  ${t.at.slice(0, 10)}  ${t.harness}  ${t.title}\n`);
+      }
+      if (result.nearWorkflows.length > 0) out("\nNear-Workflows:\n");
+      for (const w of result.nearWorkflows) {
+        const needs = [
+          w.needs.tasks > 0 ? `${w.needs.tasks} more ${plural(w.needs.tasks, "Task")}` : "",
+          w.needs.sessions > 0 ? `${w.needs.sessions} more ${plural(w.needs.sessions, "Session")}` : "",
+        ].filter(Boolean);
+        out(`  ${w.name}  (needs ${needs.join(" and ")})\n`);
+      }
+    },
+  },
   sessions: {
     summary: "List stored Sessions",
     run({ app, json, out }) {
@@ -282,6 +306,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider: modelProvider.ok ? modelProvider.modelProvider : undefined,
       embedder: io.embedder,
       projectFilter: config.projects,
+      repeatRule: config.repeatRule,
       prices: config.prices,
     });
     const exitCode = await command.run({

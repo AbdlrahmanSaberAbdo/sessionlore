@@ -13,6 +13,8 @@ export const systemClock: Clock = { now: () => new Date() };
 
 /** Turns texts into vectors for clustering (ADR 0004). */
 export interface Embedder {
+  /** Identifies the embedding model; vectors from different models are never compared. */
+  readonly modelId: string;
   embed(texts: readonly string[]): Promise<number[][]>;
 }
 
