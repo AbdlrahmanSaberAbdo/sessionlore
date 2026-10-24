@@ -1,5 +1,6 @@
 import type { Overview } from "@sessionlore/core";
 import { CorrectionsChart } from "../components/corrections-chart.js";
+import { Link } from "../router.js";
 
 export function OverviewScreen({ overview }: { overview: Overview }) {
   const { counts, topWorkflows, corrections } = overview;
@@ -37,7 +38,9 @@ export function OverviewScreen({ overview }: { overview: Overview }) {
           <ol className="workflows">
             {topWorkflows.map((w) => (
               <li key={w.id}>
-                <span className="name">{w.name}</span>
+                <Link href={`/workflows/${w.id}`} className="name">
+                  {w.name}
+                </Link>
                 <span className="muted">
                   {w.tasks} Tasks in {w.sessions} Sessions
                 </span>
