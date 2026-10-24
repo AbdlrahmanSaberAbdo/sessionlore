@@ -19,16 +19,18 @@ afterEach(() => {
  * titled with the message text, and names each Cluster with `clusterName`.
  */
 function oneTaskPerMessage(clusterName: (request: string) => string) {
-  return scriptedModelProvider((request) => {
-    const messages = [...request.matchAll(/<message index=\\"(\d+)\\">\\n([\s\S]*?)\\n<\/message>/g)];
-    if (messages.length === 0) return { name: clusterName(request) };
-    return {
-      tasks: messages.map(([, index, text]) => ({
-        title: text,
-        messages: [{ index: Number(index), intent: "New Task" }],
-      })),
-    };
-  });
+  return scriptedModelProvider((request) => oneTaskPerMessageReply(request, clusterName));
+}
+
+function oneTaskPerMessageReply(request: string, clusterName: (request: string) => string) {
+  const messages = [...request.matchAll(/<message index=\\"(\d+)\\">\\n([\s\S]*?)\\n<\/message>/g)];
+  if (messages.length === 0) return { name: clusterName(request) };
+  return {
+    tasks: messages.map(([, index, text]) => ({
+      title: text,
+      messages: [{ index: Number(index), intent: "New Task" }],
+    })),
+  };
 }
 
 function session(startedAt: string, ...requests: string[]) {
@@ -167,6 +169,26 @@ describe("recluster", () => {
     expect(shown.exitCode, shown.stderr).toBe(0);
     expect(shown.json().workflow).toMatchObject({ id: database.id, name: "Write database migrations" });
     expect(shown.json().workflow.tasks).toHaveLength(6);
+  });
+
+  it("moves Suggestions written for an old Workflow to the Workflow it mapped to", async () => {
+    migrationSessions();
+    const skill = { title: "Write a migration", trigger: "Use when changing a table.", steps: ["Write it.", "Run it."] };
+    const modelProvider = scriptedModelProvider((request) =>
+      request.includes("<workflow") ? skill : oneTaskPerMessageReply(request, namedByTopic),
+    ).modelProvider;
+    await analyze({ modelProvider, embedder: apart(), clock: now });
+    const database = (await workflows()).workflows.find((w: any) => w.name === "Write database migrations");
+    const suggested = await runCli(home, ["suggest", "--json"], { modelProvider, clock: now });
+    expect(suggested.json().created).toHaveLength(2);
+
+    await recluster({ modelProvider, embedder: together(), clock: now });
+
+    const review = (await runCli(home, ["review", "--json"])).json().suggestions;
+    expect(review.map((s: any) => s.workflow)).toEqual([
+      { id: database.id, name: "Write database migrations" },
+      { id: database.id, name: "Write database migrations" },
+    ]);
   });
 
   it("rebuilds Correction Clusters too, keeping the identity of the one each maps to", async () => {
