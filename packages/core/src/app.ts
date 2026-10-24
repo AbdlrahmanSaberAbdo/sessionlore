@@ -1,5 +1,6 @@
 import type { Adapter, HarnessContext, HarnessId } from "./adapter.js";
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
+import { ProjectFilter } from "./project-filter.js";
 import { resolveProject } from "./project.js";
 import { Store, type StoredSession } from "./store/store.js";
 
@@ -16,6 +17,8 @@ export interface AppDependencies {
   clock: Clock;
   modelProvider?: ModelProvider;
   embedder?: Embedder;
+  /** Which Projects may be stored and shown. Defaults to all of them. */
+  projectFilter?: ProjectFilter;
 }
 
 export interface HarnessScanResult {
@@ -38,6 +41,10 @@ export class App {
     return new App(deps, Store.open(deps.storePath));
   }
 
+  private get projectFilter(): ProjectFilter {
+    return this.deps.projectFilter ?? ProjectFilter.allowAll();
+  }
+
   close(): void {
     this.store.close();
   }
@@ -53,6 +60,7 @@ export class App {
           const session = await adapter.readSession(source);
           if (!session) continue;
           const project = session.cwd ? resolveProject(session.cwd) : null;
+          if (!this.projectFilter.allows(project)) continue;
           const result = this.store.saveSession({
             harness: adapter.harness,
             session,

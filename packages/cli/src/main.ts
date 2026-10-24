@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import { allAdapters } from "@sessionlore/adapters";
-import { App, storePath, type Adapter, type Clock, type Embedder, type Env, type ModelProvider } from "@sessionlore/core";
+import { App, loadConfig, storePath, type Adapter, type Clock, type Embedder, type Env, type ModelProvider } from "@sessionlore/core";
 import { unsupportedNodeMessage } from "./node-version.js";
 
 /** Everything the CLI takes from its surroundings. Seam 1 tests supply all of it. */
@@ -94,6 +94,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
 
   let app: App | undefined;
   try {
+    const config = loadConfig(io.homeDir);
     app = App.open({
       storePath: storePath(io.homeDir),
       harnessContext: { homeDir: io.homeDir, env: io.env },
@@ -101,6 +102,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       clock: io.clock,
       modelProvider: io.modelProvider,
       embedder: io.embedder,
+      projectFilter: config.projects,
     });
     await command.run({ app, json: parsed.values.json ?? false, out: io.stdout });
     return 0;
