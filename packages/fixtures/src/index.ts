@@ -9,3 +9,13 @@ export {
   type ClaudeSessionSpec,
   type WrittenClaudeSession,
 } from "./claude-code.js";
+export {
+  bubble,
+  writeCursorDatabase,
+  holdCursorDatabaseOpen,
+  cursorDatabasePath,
+  cursorUserDir,
+  type CursorBubble,
+  type CursorComposerSpec,
+  type WrittenCursorDatabase,
+} from "./cursor.js";

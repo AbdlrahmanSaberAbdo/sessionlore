@@ -100,6 +100,7 @@ export const claudeCodeAdapter: Adapter = {
       startedAt,
       endedAt,
       userMessages,
+      model: main.model,
       assistantTurnCount: main.count,
       subagentRunCount: subagents.length,
       tokens: sumUsage([main.tokens, subagentUsage.tokens]),
@@ -230,11 +231,14 @@ function parseTimestamp(value: unknown): Date | null {
  */
 class AssistantMessages {
   private readonly usageById = new Map<string, TokenUsage>();
+  /** The model of the first API message. */
+  model: string | null = null;
 
   add(record: JsonRecord): void {
     const message = record.message as { id?: unknown; model?: unknown; usage?: unknown } | undefined;
     // `<synthetic>` messages are stubs Claude Code writes itself, not model replies.
     if (!message || typeof message.id !== "string" || message.model === "<synthetic>") return;
+    if (!this.model && typeof message.model === "string") this.model = message.model;
     const usage = (message.usage ?? {}) as Record<string, unknown>;
     this.usageById.set(message.id, {
       input: tokenCount(usage.input_tokens),

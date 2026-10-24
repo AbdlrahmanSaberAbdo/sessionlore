@@ -2,6 +2,7 @@ export type {
   Adapter,
   HarnessContext,
   HarnessId,
+  HarnessMessage,
   HarnessSession,
   HarnessUserMessage,
   SessionSource,
@@ -20,7 +21,16 @@ export {
 } from "./app.js";
 export { systemClock, type Clock, type Embedder, type Env, type ModelProvider, type ModelProviderModel } from "./ports.js";
 export { resolveProject, type ResolvedProject } from "./project.js";
-export { dataDir, storePath, type SessionTasks, type StoredSession, type StoredTask } from "./store/store.js";
+export { openReadOnlyDatabase, type ReadOnlyDatabase } from "./store/database.js";
+export {
+  dataDir,
+  storePath,
+  type SessionTasks,
+  type StoredMessage,
+  type StoredSession,
+  type StoredSessionDetail,
+  type StoredTask,
+} from "./store/store.js";
 export { ConfigError, configPath, loadConfig, type Config } from "./config.js";
 export { ProjectFilter } from "./project-filter.js";
 export { costUsd, type ModelPrice, type Prices } from "./pricing.js";
