@@ -21,7 +21,17 @@
   },
   "devDependencies": {
     "@sessionlore/adapters": "workspace:*",
+    "@sessionlore/analysis": "workspace:*",
     "@sessionlore/core": "workspace:*",
     "@sessionlore/fixtures": "workspace:*"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "4.0.87",
+    "@ai-sdk/google": "4.0.104",
+    "@ai-sdk/openai": "4.0.101",
+    "@ai-sdk/openai-compatible": "3.0.77",
+    "ai": "7.0.152",
+    "ollama-ai-provider-v2": "4.1.0",
+    "zod": "4.6.7"
   }
 }

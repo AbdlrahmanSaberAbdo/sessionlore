@@ -64,6 +64,24 @@ export const migrations: readonly Migration[] = [
   },
   {
     version: 3,
+    name: "tasks and intents",
+    sql: `
+      ALTER TABLE sessions ADD COLUMN analyzed_fingerprint TEXT;
+
+      CREATE TABLE tasks (
+        id          INTEGER PRIMARY KEY,
+        session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        position    INTEGER NOT NULL,
+        title       TEXT NOT NULL,
+        UNIQUE (session_id, position)
+      );
+
+      ALTER TABLE user_messages ADD COLUMN task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL;
+      ALTER TABLE user_messages ADD COLUMN intent TEXT;
+    `,
+  },
+  {
+    version: 4,
     name: "session model and messages",
     sql: `
       ALTER TABLE sessions ADD COLUMN model TEXT;

@@ -2,7 +2,8 @@ import type { Adapter, HarnessContext, HarnessId, SessionSource } from "./adapte
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { ProjectFilter } from "./project-filter.js";
 import { resolveProject } from "./project.js";
-import { Store, type StoredSession, type StoredSessionDetail } from "./store/store.js";
+import { splitIntoTasks, taskSplitPrompt } from "@sessionlore/analysis";
+import { Store, type SessionTasks, type StoredSession, type StoredSessionDetail } from "./store/store.js";
 
 /**
  * The application interface. The CLI and the HTTP server are thin layers over
@@ -41,6 +42,12 @@ export interface ScanOptions {
 
 export interface ScanResult {
   harnesses: HarnessScanResult[];
+}
+
+export interface AnalysisResult {
+  /** Ids of the Sessions analyzed. */
+  analyzed: string[];
+  failed: { session: string; error: string }[];
 }
 
 export class App {
@@ -131,6 +138,41 @@ export class App {
       return null;
     }
     return session;
+  }
+
+  /**
+   * Splits every new or changed Session into Tasks and labels the Intent of
+   * each User Message with the cheap model. A Session that fails is reported
+   * and left for the next Analysis; the others still complete.
+   */
+  async analyze(): Promise<AnalysisResult> {
+    const modelProvider = this.deps.modelProvider;
+    if (!modelProvider) throw new Error("No Model Provider is configured.");
+    const result: AnalysisResult = { analyzed: [], failed: [] };
+    const sessions = this.store.sessionsToAnalyze().filter((s) => this.projectFilter.allows(s.project));
+    for (const session of sessions) {
+      try {
+        const tasks = await splitIntoTasks(modelProvider.cheap, session.userMessages);
+        this.store.saveAnalysis(session.key, session.fingerprint, tasks);
+        result.analyzed.push(session.id);
+      } catch (error) {
+        result.failed.push({ session: session.id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return result;
+  }
+
+  /** The redacted text Analysis would send for a Session, or null if no Session has that id. */
+  redactedRequest(sessionId: string): string | null {
+    const session = this.store.sessionWithMessages(sessionId);
+    if (!session || !this.projectFilter.allows(session.project)) return null;
+    return taskSplitPrompt(session.userMessages);
+  }
+
+  listTasks(): SessionTasks[] {
+    return this.store
+      .listTasks()
+      .filter((s) => this.projectFilter.allows(s.project && { root: s.project.path, name: s.project.name }));
   }
 }
 
