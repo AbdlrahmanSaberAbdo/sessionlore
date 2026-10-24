@@ -24,6 +24,9 @@ export {
   type SuggestResult,
   type AcceptResult,
   SuggestionStateError,
+  type CorrectionClusterView,
+  type NearCorrectionClusterView,
+  type CorrectionsResult,
 } from "./app.js";
 export {
   defaultScope,
@@ -47,6 +50,7 @@ export {
   dataDir,
   storePath,
   type ClusterTask,
+  type ClusterCorrection,
   type SessionTasks,
   type StoredMessage,
   type StoredSession,

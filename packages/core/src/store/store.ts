@@ -100,6 +100,25 @@ export interface NewSuggestion {
   createdAt: Date;
 }
 
+export interface ClusterCorrection {
+  text: string;
+  /** Title of the Task the Correction belongs to. */
+  task: string;
+  /** Id of the Session the Correction belongs to. */
+  session: string;
+  harness: HarnessId;
+  project: { name: string; path: string } | null;
+  /** The Correction's timestamp. */
+  at: string;
+}
+
+export interface StoredCorrectionCluster {
+  id: number;
+  /** Null until the cheap model has named it. */
+  name: string | null;
+  corrections: ClusterCorrection[];
+}
+
 export interface SaveSessionInput {
   harness: HarnessId;
   session: HarnessSession;
@@ -350,7 +369,10 @@ export class Store {
   /** Replaces a Session's Tasks with the result of analyzing the content identified by `fingerprint`. */
   saveAnalysis(sessionKey: number, fingerprint: string, tasks: readonly SplitTask[]): void {
     this.db.transaction(() => {
-      this.db.run("UPDATE user_messages SET task_id = NULL, intent = NULL WHERE session_id = ?", sessionKey);
+      this.db.run(
+        "UPDATE user_messages SET task_id = NULL, intent = NULL, correction_cluster_id = NULL WHERE session_id = ?",
+        sessionKey,
+      );
       this.db.run("DELETE FROM tasks WHERE session_id = ?", sessionKey);
       tasks.forEach((task, position) => {
         const taskId = this.db.run(
@@ -687,6 +709,147 @@ export class Store {
         installedFiles: JSON.parse(row.installed_files) as string[],
       };
     });
+  }
+
+  /** Corrections with no embedding from `modelId` yet, with their text. */
+  correctionsToEmbed(modelId: string): { key: number; text: string }[] {
+    return this.db
+      .all<{ id: number; text: string }>(
+        `SELECT m.id, m.text FROM user_messages m JOIN sessions s ON s.id = m.session_id
+          WHERE m.intent = 'Correction' AND (m.embedding IS NULL OR m.embedding_model IS NOT ?)
+          ORDER BY s.started_at, s.id, m.position`,
+        modelId,
+      )
+      .map((m) => ({ key: m.id, text: m.text }));
+  }
+
+  saveCorrectionEmbeddings(modelId: string, embeddings: readonly { key: number; vector: readonly number[] }[]): void {
+    this.db.transaction(() => {
+      for (const { key, vector } of embeddings) {
+        this.db.run(
+          "UPDATE user_messages SET embedding = ?, embedding_model = ? WHERE id = ?",
+          new Uint8Array(Float32Array.from(vector).buffer),
+          modelId,
+          key,
+        );
+      }
+    });
+  }
+
+  /** Every Correction Cluster with the `modelId` embeddings of its Corrections. */
+  correctionClusterVectors(modelId: string): { id: number; vectors: number[][] }[] {
+    const byCluster = new Map<number, number[][]>();
+    for (const row of this.db.all<{ cluster_id: number; embedding: Uint8Array | null; embedding_model: string | null }>(
+      `SELECT c.id AS cluster_id, m.embedding, m.embedding_model
+         FROM correction_clusters c
+         LEFT JOIN user_messages m ON m.correction_cluster_id = c.id AND m.intent = 'Correction'
+        ORDER BY c.id, m.id`,
+    )) {
+      const vectors = byCluster.get(row.cluster_id) ?? [];
+      byCluster.set(row.cluster_id, vectors);
+      if (row.embedding && row.embedding_model === modelId) vectors.push(decodeVector(row.embedding));
+    }
+    return [...byCluster].map(([id, vectors]) => ({ id, vectors }));
+  }
+
+  /** Embedded Corrections that belong to no Correction Cluster yet, oldest Session first. */
+  unclusteredCorrections(modelId: string): { key: number; vector: number[] }[] {
+    return this.db
+      .all<{ id: number; embedding: Uint8Array }>(
+        `SELECT m.id, m.embedding FROM user_messages m JOIN sessions s ON s.id = m.session_id
+          WHERE m.intent = 'Correction' AND m.correction_cluster_id IS NULL
+            AND m.embedding IS NOT NULL AND m.embedding_model = ?
+          ORDER BY s.started_at, s.id, m.position`,
+        modelId,
+      )
+      .map((m) => ({ key: m.id, vector: decodeVector(m.embedding) }));
+  }
+
+  /** Puts Corrections into existing Correction Clusters or new ones, then drops Correction Clusters left empty. */
+  placeCorrections(
+    placements: readonly ({ task: number } & ({ cluster: number } | { newCluster: number }))[],
+    at: Date,
+  ): void {
+    this.db.transaction(() => {
+      const created = new Map<number, number>();
+      for (const placement of placements) {
+        let cluster: number;
+        if ("cluster" in placement) cluster = placement.cluster;
+        else {
+          cluster =
+            created.get(placement.newCluster) ??
+            this.db.run("INSERT INTO correction_clusters (created_at) VALUES (?)", at.toISOString()).lastInsertRowid;
+          created.set(placement.newCluster, cluster);
+        }
+        this.db.run("UPDATE user_messages SET correction_cluster_id = ? WHERE id = ?", cluster, placement.task);
+      }
+      this.db.run(
+        `DELETE FROM correction_clusters WHERE id NOT IN
+           (SELECT correction_cluster_id FROM user_messages WHERE correction_cluster_id IS NOT NULL AND intent = 'Correction')`,
+      );
+    });
+  }
+
+  /** Correction Clusters not named yet that have at least `minCorrections` Corrections, with their text. */
+  unnamedCorrectionClusters(minCorrections: number): { id: number; corrections: string[] }[] {
+    return this.db
+      .all<{ id: number }>(
+        `SELECT c.id FROM correction_clusters c
+          WHERE c.name IS NULL
+            AND (SELECT COUNT(*) FROM user_messages m WHERE m.correction_cluster_id = c.id AND m.intent = 'Correction') >= ?
+          ORDER BY c.id`,
+        minCorrections,
+      )
+      .map((c) => ({
+        id: c.id,
+        corrections: this.db
+          .all<{ text: string }>(
+            "SELECT text FROM user_messages WHERE correction_cluster_id = ? AND intent = 'Correction' ORDER BY id",
+            c.id,
+          )
+          .map((m) => m.text),
+      }));
+  }
+
+  nameCorrectionCluster(id: number, name: string): void {
+    this.db.run("UPDATE correction_clusters SET name = ? WHERE id = ?", name, id);
+  }
+
+  /** Every Correction Cluster with its Corrections, oldest first. */
+  listCorrectionClusters(): StoredCorrectionCluster[] {
+    const clusters = new Map<number, StoredCorrectionCluster>();
+    for (const row of this.db.all<{
+      cluster_id: number;
+      name: string | null;
+      text: string;
+      task: string;
+      session_id: string;
+      harness: string;
+      project_name: string | null;
+      project_root: string | null;
+      at: string;
+    }>(
+      `SELECT c.id AS cluster_id, c.name, m.text, t.title AS task, s.external_id AS session_id, s.harness,
+              p.name AS project_name, p.root AS project_root, m.timestamp AS at
+         FROM correction_clusters c
+         JOIN user_messages m ON m.correction_cluster_id = c.id AND m.intent = 'Correction'
+         JOIN tasks t ON t.id = m.task_id
+         JOIN sessions s ON s.id = m.session_id
+         LEFT JOIN projects p ON p.id = s.project_id
+        ORDER BY c.id, m.timestamp, s.id, m.position`,
+    )) {
+      const cluster = clusters.get(row.cluster_id) ?? { id: row.cluster_id, name: row.name, corrections: [] };
+      clusters.set(row.cluster_id, cluster);
+      cluster.corrections.push({
+        text: row.text,
+        task: row.task,
+        session: row.session_id,
+        harness: row.harness as HarnessId,
+        project: row.project_root && row.project_name ? { name: row.project_name, path: row.project_root } : null,
+        at: row.at,
+      });
+    }
+    return [...clusters.values()];
   }
 
   private userMessageTexts(sessionKey: number): string[] {

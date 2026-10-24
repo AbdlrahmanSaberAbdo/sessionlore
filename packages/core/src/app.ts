@@ -8,6 +8,7 @@ import {
   estimateTaskSplit,
   MalformedReplyError,
   nameCluster,
+  nameCorrectionCluster,
   placeTasks,
   splitIntoTasks,
   taskEmbeddingText,
@@ -30,6 +31,7 @@ import {
 import { costUsd, type Prices } from "./pricing.js";
 import {
   Store,
+  type ClusterCorrection,
   type ClusterTask,
   type SessionTasks,
   type StoredSession,
@@ -71,6 +73,32 @@ export interface ClusterView {
   harnesses: HarnessId[];
   /** Tasks and Sessions inside the Repeat Rule's window, which is what the rule counts. */
   counted: { tasks: number; sessions: number };
+}
+
+/** A Correction Cluster as `corrections` shows it. Its id is stable across Analyses. */
+export interface CorrectionClusterView {
+  id: number;
+  name: string;
+  /** Every Correction in it, oldest first, including those outside the Repeat Rule's window. */
+  corrections: ClusterCorrection[];
+  /** The distinct Sessions of those Corrections, in order of their first Correction. */
+  sessions: ClusterView["sessions"];
+  harnesses: HarnessId[];
+  /** Corrections and Sessions inside the Repeat Rule's window, which is what the rule counts. */
+  counted: { corrections: number; sessions: number };
+}
+
+/** A Correction Cluster close to passing the Repeat Rule. */
+export interface NearCorrectionClusterView extends CorrectionClusterView {
+  /** How many more Corrections and Sessions inside the window it needs to pass. */
+  needs: { corrections: number; sessions: number };
+}
+
+export interface CorrectionsResult {
+  repeatRule: RepeatRule;
+  /** Correction Clusters that pass the Repeat Rule. */
+  correctionClusters: CorrectionClusterView[];
+  nearCorrectionClusters: NearCorrectionClusterView[];
 }
 
 /** A Cluster close to passing the Repeat Rule. */
@@ -312,6 +340,7 @@ export class App {
       done += 1;
     }
     if (this.deps.embedder && !signal?.aborted) await this.clusterTasks(this.deps.embedder, model, usage, signal);
+    if (this.deps.embedder && !signal?.aborted) await this.clusterCorrections(this.deps.embedder, model, usage, signal);
     const interrupted = done < sessions.length;
     return { analyzed, failed, usage: usage.byModel(), interrupted, remaining: sessions.length - done };
   }
@@ -359,6 +388,87 @@ export class App {
         // Left unnamed and retried by the next Analysis; listings fall back to a Task title meanwhile.
       }
     }
+  }
+
+  /**
+   * Embeds Corrections locally and groups them into Correction Clusters across
+   * all Tasks, regardless of Workflow, in the same incremental way as Tasks.
+   */
+  private async clusterCorrections(
+    embedder: Embedder,
+    model: ModelProvider["cheap"],
+    usage: UsageTally,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const toEmbed = this.store.correctionsToEmbed(embedder.modelId);
+    for (let i = 0; i < toEmbed.length; i += EMBED_BATCH) {
+      const batch = toEmbed.slice(i, i + EMBED_BATCH);
+      const vectors = await embedder.embed(batch.map((c) => c.text));
+      this.store.saveCorrectionEmbeddings(
+        embedder.modelId,
+        batch.map((c, j) => ({ key: c.key, vector: vectors[j]! })),
+      );
+    }
+    const placements = placeTasks(
+      this.store.correctionClusterVectors(embedder.modelId),
+      this.store.unclusteredCorrections(embedder.modelId).map((c) => ({ task: c.key, vector: c.vector })),
+    );
+    this.store.placeCorrections(placements, this.deps.clock.now());
+
+    const showable = Math.min(NEAR_WORKFLOW_MIN_TASKS, this.repeatRule.minMembers);
+    for (const cluster of this.store.unnamedCorrectionClusters(showable)) {
+      if (signal?.aborted) return;
+      try {
+        const { name, tokens } = await nameCorrectionCluster(model, cluster.corrections, signal);
+        usage.add(model.modelId, tokens);
+        this.store.nameCorrectionCluster(cluster.id, name);
+      } catch (error) {
+        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
+        // Left unnamed and retried by the next Analysis; listings fall back to a Correction's text meanwhile.
+      }
+    }
+  }
+
+  /** Correction Clusters that pass the Repeat Rule now, and those close to passing. */
+  listCorrections(): CorrectionsResult {
+    const rule = this.repeatRule;
+    const now = this.deps.clock.now();
+    const result: CorrectionsResult = { repeatRule: rule, correctionClusters: [], nearCorrectionClusters: [] };
+    for (const cluster of this.store.listCorrectionClusters()) {
+      const corrections = cluster.corrections.filter((c) =>
+        this.projectFilter.allows(c.project && { root: c.project.path, name: c.project.name }),
+      );
+      if (corrections.length === 0) continue;
+      const verdict = applyRepeatRule(
+        corrections.map((c) => ({ session: c.session, at: new Date(c.at) })),
+        rule,
+        now,
+      );
+      const sessions = new Map<string, CorrectionClusterView["sessions"][number]>();
+      for (const c of corrections) {
+        if (!sessions.has(c.session)) sessions.set(c.session, { id: c.session, harness: c.harness, project: c.project });
+      }
+      const view: CorrectionClusterView = {
+        id: cluster.id,
+        name: cluster.name ?? corrections[0]!.text,
+        corrections,
+        sessions: [...sessions.values()],
+        harnesses: [...new Set(corrections.map((c) => c.harness))],
+        counted: { corrections: verdict.counted.members, sessions: verdict.counted.sessions },
+      };
+      if (verdict.passes) result.correctionClusters.push(view);
+      else if (verdict.counted.members >= Math.min(NEAR_WORKFLOW_MIN_TASKS, rule.minMembers)) {
+        result.nearCorrectionClusters.push({
+          ...view,
+          needs: { corrections: verdict.needs.members, sessions: verdict.needs.sessions },
+        });
+      }
+    }
+    const busiestFirst = (a: CorrectionClusterView, b: CorrectionClusterView) =>
+      b.counted.corrections - a.counted.corrections || a.id - b.id;
+    result.correctionClusters.sort(busiestFirst);
+    result.nearCorrectionClusters.sort(busiestFirst);
+    return result;
   }
 
   /** Clusters that pass the Repeat Rule now, and those close to passing. */

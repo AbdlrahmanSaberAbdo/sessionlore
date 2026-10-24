@@ -11,6 +11,8 @@ export {
 export {
   CLUSTER_SIMILARITY,
   clusterNamePrompt,
+  correctionClusterNamePrompt,
+  nameCorrectionCluster,
   nameCluster,
   placeTasks,
   taskEmbeddingText,
