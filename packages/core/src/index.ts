@@ -23,6 +23,9 @@ export {
   type ClusterRef,
   type ReclusterResult,
   type WorkflowsResult,
+  type CorrectionClusterView,
+  type NearCorrectionClusterView,
+  type CorrectionsResult,
 } from "./app.js";
 export { systemClock, type Clock, type Embedder, type Env, type ModelProvider, type ModelProviderModel } from "./ports.js";
 export { resolveProject, type ResolvedProject } from "./project.js";
@@ -31,6 +34,7 @@ export {
   dataDir,
   storePath,
   type ClusterTask,
+  type ClusterCorrection,
   type SessionTasks,
   type StoredMessage,
   type StoredSession,

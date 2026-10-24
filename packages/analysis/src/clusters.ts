@@ -143,17 +143,49 @@ export function clusterNamePrompt(taskTitles: readonly string[]): string {
 }
 
 /** Names a Cluster from its Task titles, using `model` (the cheap model). */
-export async function nameCluster(
+export function nameCluster(
   model: Exclude<LanguageModel, string>,
   taskTitles: readonly string[],
   signal?: AbortSignal,
 ): Promise<{ name: string; tokens: TokenCount }> {
+  return nameGroup(model, nameSystem, clusterNamePrompt(taskTitles), signal);
+}
+
+const correctionNameSchema = z.object({
+  name: z.string().min(1).max(80).describe("The standing instruction these Corrections share, e.g. 'Use pnpm, not npm'"),
+});
+
+const correctionNameSystem = `You name a group of similar Corrections: messages in which someone rejected or fixed what their AI coding agent did.
+Reply with a short name (2 to 8 words, imperative, no trailing period) for what the person keeps asking the agent to do instead.
+Text like [REDACTED:api-key] replaced a secret; treat it as an opaque value.`;
+
+/** The request text sent to name a Correction Cluster from its Corrections, with secrets redacted. */
+export function correctionClusterNamePrompt(corrections: readonly string[]): string {
+  return corrections.map((text) => `<correction>${redact(text)}</correction>`).join("\n");
+}
+
+/** Names a Correction Cluster from its Corrections' text, using `model` (the cheap model). */
+export function nameCorrectionCluster(
+  model: Exclude<LanguageModel, string>,
+  corrections: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ name: string; tokens: TokenCount }> {
+  return nameGroup(model, correctionNameSystem, correctionClusterNamePrompt(corrections), signal, correctionNameSchema);
+}
+
+async function nameGroup(
+  model: Exclude<LanguageModel, string>,
+  system: string,
+  prompt: string,
+  signal: AbortSignal | undefined,
+  schema: typeof nameSchema = nameSchema,
+): Promise<{ name: string; tokens: TokenCount }> {
   try {
     const result = await generateText({
       model,
-      system: nameSystem,
-      prompt: clusterNamePrompt(taskTitles),
-      output: Output.object({ schema: nameSchema }),
+      system,
+      prompt,
+      output: Output.object({ schema }),
       temperature: 0,
       abortSignal: signal,
     });
