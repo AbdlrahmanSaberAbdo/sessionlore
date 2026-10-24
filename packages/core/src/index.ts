@@ -20,6 +20,8 @@ export {
   type HarnessScanResult,
   type ClusterView,
   type NearWorkflowView,
+  type ClusterRef,
+  type ReclusterResult,
   type WorkflowsResult,
   type SuggestResult,
   type AcceptResult,
