@@ -64,6 +64,7 @@ export const migrations: readonly Migration[] = [
         text         TEXT,
         tool_name    TEXT,
         tool_status  TEXT,
+        subagent     TEXT,
         timestamp    TEXT,
         UNIQUE (session_id, position)
       );

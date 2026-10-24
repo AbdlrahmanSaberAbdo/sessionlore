@@ -24,9 +24,10 @@ export interface StoredSession {
   userMessageCount: number;
 }
 
-export type StoredMessage =
-  | { role: "user" | "assistant"; text: string; timestamp: string | null }
-  | { role: "tool"; name: string; status: string | null; timestamp: string | null };
+export type StoredMessage = (
+  | { role: "user" | "assistant"; text: string }
+  | { role: "tool"; name: string; status: string | null }
+) & { timestamp: string | null; subagent?: string };
 
 export interface StoredSessionDetail extends StoredSession {
   messages: StoredMessage[];
@@ -129,20 +130,22 @@ export class Store {
       text: string | null;
       tool_name: string | null;
       tool_status: string | null;
+      subagent: string | null;
       timestamp: string | null;
     }>(
-      `SELECT m.role, m.text, m.tool_name, m.tool_status, m.timestamp
+      `SELECT m.role, m.text, m.tool_name, m.tool_status, m.subagent, m.timestamp
          FROM messages m JOIN sessions s ON s.id = m.session_id
         WHERE s.external_id = ? AND s.harness = ?
         ORDER BY m.position`,
       externalId,
       session.harness,
     );
-    const messages = rows.map((row): StoredMessage =>
-      row.role === "tool"
-        ? { role: "tool", name: row.tool_name ?? "", status: row.tool_status, timestamp: row.timestamp }
-        : { role: row.role as "user" | "assistant", text: row.text ?? "", timestamp: row.timestamp },
-    );
+    const messages = rows.map((row): StoredMessage => {
+      const extra = { timestamp: row.timestamp, ...(row.subagent ? { subagent: row.subagent } : {}) };
+      return row.role === "tool"
+        ? { role: "tool", name: row.tool_name ?? "", status: row.tool_status, ...extra }
+        : { role: row.role as "user" | "assistant", text: row.text ?? "", ...extra };
+    });
     return { ...session, messages };
   }
 
@@ -183,14 +186,15 @@ export class Store {
 
   private insertMessage(sessionId: number, position: number, message: HarnessMessage): void {
     this.db.run(
-      `INSERT INTO messages (session_id, position, role, text, tool_name, tool_status, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (session_id, position, role, text, tool_name, tool_status, subagent, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       sessionId,
       position,
       message.role,
       message.role === "tool" ? null : message.text,
       message.role === "tool" ? message.name : null,
       message.role === "tool" ? message.status : null,
+      message.subagent ?? null,
       message.timestamp?.toISOString() ?? null,
     );
   }

@@ -82,4 +82,48 @@ describe("scan of Cursor Sessions", () => {
       { role: "user", text: "thanks", timestamp: "2026-05-01T09:05:00.000Z" },
     ]);
   });
+
+  it("attaches a subagent composer to its parent Session instead of listing it", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeCursorDatabase(home, [
+      {
+        id: "parent-composer",
+        folder: repo,
+        createdAt: "2026-05-01T09:00:00.000Z",
+        stepSeconds: 60,
+        bubbles: [
+          bubble.user("find where prices are rounded"),
+          bubble.tool("task_v2", "completed", { toolCallId: "call-explore" }),
+          bubble.assistant("Prices are rounded in money.ts."),
+        ],
+      },
+      {
+        id: "subagent-composer",
+        folder: repo,
+        createdAt: "2026-05-01T09:01:10.000Z",
+        stepSeconds: 5,
+        subagentOf: { parentId: "parent-composer", toolCallId: "call-explore", typeName: "explore" },
+        bubbles: [
+          bubble.user("Search the codebase for price rounding."),
+          bubble.tool("ripgrep_raw_search"),
+          bubble.assistant("Found Math.round in money.ts."),
+        ],
+      },
+    ]);
+
+    await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+    const { session } = (await runCli(home, ["session", "parent-composer", "--json"])).json();
+
+    expect(sessions.map((s: any) => [s.id, s.userMessageCount])).toEqual([["parent-composer", 1]]);
+    expect(session.messages.map((m: any) => m.name ?? m.text)).toEqual([
+      "find where prices are rounded",
+      "task_v2",
+      "Search the codebase for price rounding.",
+      "ripgrep_raw_search",
+      "Found Math.round in money.ts.",
+      "Prices are rounded in money.ts.",
+    ]);
+    expect(session.messages[2]).toMatchObject({ role: "assistant", subagent: "explore" });
+  });
 });
