@@ -9,8 +9,8 @@ import {
   type HarnessSession,
   type HarnessUserMessage,
   type ReadOnlyDatabase,
-  type ScanWarnings,
   type SessionSource,
+  type TokenUsage,
 } from "@sessionlore/core";
 
 /**
@@ -39,21 +39,32 @@ export const cursorAdapter: Adapter = {
       ),
     );
     // A Session changes when its composer or any of its subagent composers does.
-    const updates = new Map<string, string[]>();
+    const updates = new Map<string, { markers: string[]; lastActivity: number }>();
     const roots: string[] = [];
     for (const header of headers) {
       const owner = Number(header.isSubagent) === 1 ? rootParentOf(parseJson(header.value)) : header.composerId;
       if (!owner) continue; // a subagent whose parent is unknown is not a Session of its own
       if (owner === header.composerId) roots.push(owner);
-      updates.set(owner, [...(updates.get(owner) ?? []), `${header.composerId}@${String(header.lastUpdatedAt ?? "")}`]);
+      const group = updates.get(owner) ?? { markers: [], lastActivity: 0 };
+      group.markers.push(`${header.composerId}@${String(header.lastUpdatedAt ?? "")}`);
+      group.lastActivity = Math.max(group.lastActivity, Number(header.lastUpdatedAt ?? 0));
+      updates.set(owner, group);
     }
     for (const composerId of roots) {
-      yield { externalId: composerId, location: database, changeMarker: (updates.get(composerId) ?? []).sort().join(",") };
+      const group = updates.get(composerId)!;
+      yield {
+        externalId: composerId,
+        location: database,
+        changeMarker: group.markers.sort().join(","),
+        lastActivityAt: new Date(group.lastActivity),
+      };
     }
   },
 
-  async readSession(source: SessionSource, warnings: ScanWarnings): Promise<HarnessSession | null> {
-    return withDatabase(source.location, (db) => readComposer({ db, database: source.location, warnings }, source.externalId));
+  async readSession(source: SessionSource): Promise<HarnessSession | null> {
+    return withDatabase(source.location, (db) =>
+      readComposer({ db, database: source.location, unrecognized: {}, tokens: emptyUsage() }, source.externalId),
+    );
   },
 };
 
@@ -76,7 +87,10 @@ interface Reader {
   db: ReadOnlyDatabase;
   /** Path of the `state.vscdb` being read. */
   database: string;
-  warnings: ScanWarnings;
+  /** What was skipped or not fully understood, by shape (see `HarnessSession.unrecognized`). */
+  unrecognized: Record<string, number>;
+  /** Tokens of every bubble read, subagents' included. */
+  tokens: TokenUsage;
 }
 
 interface SubagentHeader {
@@ -104,7 +118,8 @@ function readComposer(reader: Reader, composerId: string): HarnessSession | null
   const data = readComposerData(reader, composerId);
   if (!head || !data || head.isDraft === true) return null;
 
-  const messages = readThread(reader, composerId, data, null, new Set([composerId]));
+  const seen = new Set([composerId]);
+  const messages = readThread(reader, composerId, data, null, seen);
   const userMessages: HarnessUserMessage[] = [];
   let startedAt: Date | null = null;
   let endedAt: Date | null = null;
@@ -115,6 +130,11 @@ function readComposer(reader: Reader, composerId: string): HarnessSession | null
       if (!endedAt || timestamp > endedAt) endedAt = timestamp;
     }
     if (message.role === "user" && timestamp) userMessages.push({ text: message.text, timestamp });
+  }
+  if (Object.keys(reader.unrecognized).length > 0) {
+    // Keep the Session even if nothing in it could be read, so its warning is not lost with it.
+    startedAt ??= parseDate(head.createdAt);
+    endedAt ??= parseDate(head.lastUpdatedAt) ?? startedAt;
   }
   if (!startedAt || !endedAt) return null;
 
@@ -127,6 +147,11 @@ function readComposer(reader: Reader, composerId: string): HarnessSession | null
     model: typeof modelConfig?.modelName === "string" ? modelConfig.modelName : null,
     userMessages,
     messages,
+    // Cursor has no API message ids; each visible assistant bubble of the conversation is one reply.
+    assistantTurnCount: messages.filter((m) => m.role === "assistant" && !m.subagent).length,
+    subagentRunCount: seen.size - 1,
+    tokens: reader.tokens,
+    unrecognized: reader.unrecognized,
   };
 }
 
@@ -134,16 +159,31 @@ function readComposerData(reader: Reader, composerId: string): Json | null {
   const data = parseJson(
     reader.db.get<{ value: SqlBlob }>("SELECT value FROM cursorDiskKV WHERE key = ?", `composerData:${composerId}`)?.value,
   );
-  if (data) checkVersion(reader, data, KNOWN_COMPOSER_VERSION, "composers");
+  // A composer is the Session itself, so a newer one is still read (and reported); its bubbles are checked one by one.
+  const version = unknownVersion(data, KNOWN_COMPOSER_VERSION);
+  if (version !== null) count(reader, `composer format version ${version}, read as best possible`);
   return data;
 }
 
-/** Values newer than the Adapter knows are still read, as best possible, but never silently. */
-function checkVersion(reader: Reader, value: Json, known: number, what: string): void {
-  const version = value._v;
-  if (typeof version === "number" && version > known) {
-    reader.warnings.warn(`${what} in unknown format version ${version} (newest known: ${known}), read as best possible`);
-  }
+/** The `_v` of a value if it is newer than this Adapter knows, else null. */
+function unknownVersion(value: Json | null, known: number): number | null {
+  const version = value?._v;
+  return typeof version === "number" && version > known ? version : null;
+}
+
+function count(reader: Reader, shape: string): void {
+  reader.unrecognized[shape] = (reader.unrecognized[shape] ?? 0) + 1;
+}
+
+function emptyUsage(): TokenUsage {
+  return { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
+}
+
+function addTokens(reader: Reader, bubble: Json): void {
+  const usage = bubble.tokenCount as { inputTokens?: unknown; outputTokens?: unknown } | undefined;
+  const n = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+  reader.tokens.input += n(usage?.inputTokens);
+  reader.tokens.output += n(usage?.outputTokens);
 }
 
 /**
@@ -236,7 +276,12 @@ function readBubbles(reader: Reader, composerId: string, data: Json): Json[] {
   for (const entry of order) {
     const value = parseJson(byId.get(String(entry.bubbleId)));
     if (!value) continue;
-    checkVersion(reader, value, KNOWN_BUBBLE_VERSION, "message bubbles");
+    const version = unknownVersion(value, KNOWN_BUBBLE_VERSION);
+    if (version !== null) {
+      count(reader, `bubble format version ${version}`);
+      continue;
+    }
+    addTokens(reader, value);
     bubbles.push(value);
   }
   return bubbles;

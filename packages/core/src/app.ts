@@ -1,4 +1,4 @@
-import type { Adapter, HarnessContext, HarnessId, ScanWarnings } from "./adapter.js";
+import type { Adapter, HarnessContext, HarnessId, SessionSource } from "./adapter.js";
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { ProjectFilter } from "./project-filter.js";
 import { resolveProject } from "./project.js";
@@ -24,16 +24,19 @@ export interface AppDependencies {
 export interface HarnessScanResult {
   harness: HarnessId;
   name: string;
+  /** Sessions new to the store. */
   added: number;
-  /** Sessions already in the store whose content changed since the last Scan. */
+  /** Stored Sessions whose content changed since they were last read. */
   updated: number;
-  /** Storage the Adapter did not fully understand, with how many items each warning covers. */
-  warnings: ScanWarning[];
+  /** Stored Sessions skipped because nothing changed since they were last read. */
+  unchanged: number;
+  /** Problems the person should know about, such as storage the Adapter did not recognise. */
+  warnings: string[];
 }
 
-export interface ScanWarning {
-  message: string;
-  count: number;
+export interface ScanOptions {
+  /** Read only the N Sessions with the most recent activity, across all Harnesses. */
+  last?: number;
 }
 
 export interface ScanResult {
@@ -59,46 +62,60 @@ export class App {
   }
 
   /** Reads every Harness's storage into the store. Never writes to Harness storage. */
-  async scan(): Promise<ScanResult> {
+  async scan(options: ScanOptions = {}): Promise<ScanResult> {
     const scanId = this.store.startScan(this.deps.clock.now());
     this.store.removeSessionsUnless((project) => this.projectFilter.allows(project));
-    const harnesses: HarnessScanResult[] = [];
+    const counts = new Map<Adapter, { added: number; updated: number; unchanged: number }>();
+    const unrecognized = new Map<Adapter, Map<string, number>>();
+    const found: { adapter: Adapter; source: SessionSource }[] = [];
     for (const adapter of this.deps.adapters) {
       const storages = await adapter.discover(this.deps.harnessContext);
       if (storages.length === 0) continue; // this Harness has no data on this machine
-      let added = 0;
-      let updated = 0;
-      const counts = new Map<string, number>();
-      const warnings: ScanWarnings = { warn: (message) => counts.set(message, (counts.get(message) ?? 0) + 1) };
+      counts.set(adapter, { added: 0, updated: 0, unchanged: 0 });
+      unrecognized.set(adapter, new Map());
       for (const storage of storages) {
-        for await (const source of adapter.listSessions(storage, warnings)) {
-          // Incremental: a Session whose change marker is unchanged is not read again.
-          if (this.store.sessionFingerprint(adapter.harness, source.externalId) === source.changeMarker) continue;
-          const session = await adapter.readSession(source, warnings);
-          if (!session) continue;
-          const project = session.cwd ? resolveProject(session.cwd) : null;
-          if (!this.projectFilter.allows(project)) continue;
-          const result = this.store.saveSession({
-            harness: adapter.harness,
-            session,
-            project,
-            fingerprint: source.changeMarker,
-            scanId,
-          });
-          if (result.added) added += 1;
-          else updated += 1;
-        }
+        for await (const source of adapter.listSessions(storage)) found.push({ adapter, source });
       }
-      harnesses.push({
+    }
+    const selected =
+      options.last === undefined
+        ? found
+        : found
+            .sort((a, b) => b.source.lastActivityAt.getTime() - a.source.lastActivityAt.getTime())
+            .slice(0, options.last);
+
+    for (const { adapter, source } of selected) {
+      const count = counts.get(adapter)!;
+      if (this.store.sessionFingerprint(adapter.harness, source.externalId) === source.changeMarker) {
+        count.unchanged += 1;
+        continue;
+      }
+      const session = await adapter.readSession(source);
+      if (!session) continue;
+      const project = session.cwd ? resolveProject(session.cwd) : null;
+      if (!this.projectFilter.allows(project)) continue;
+      const tally = unrecognized.get(adapter)!;
+      for (const [shape, n] of Object.entries(session.unrecognized)) tally.set(shape, (tally.get(shape) ?? 0) + n);
+      const result = this.store.saveSession({
+        harness: adapter.harness,
+        session,
+        project,
+        fingerprint: source.changeMarker,
+        scanId,
+      });
+      if (result.added) count.added += 1;
+      else count.updated += 1;
+    }
+
+    this.store.finishScan(scanId, this.deps.clock.now());
+    return {
+      harnesses: [...counts].map(([adapter, count]) => ({
         harness: adapter.harness,
         name: adapter.displayName,
-        added,
-        updated,
-        warnings: [...counts].map(([message, count]) => ({ message, count })),
-      });
-    }
-    this.store.finishScan(scanId, this.deps.clock.now());
-    return { harnesses };
+        ...count,
+        warnings: unrecognizedWarnings(adapter, unrecognized.get(adapter)!),
+      })),
+    };
   }
 
   listSessions(): StoredSession[] {
@@ -109,6 +126,23 @@ export class App {
   }
 
   getSession(id: string): StoredSessionDetail | null {
-    return this.store.getSession(id);
+    const session = this.store.getSession(id);
+    if (!session || !this.projectFilter.allows(session.project && { root: session.project.path, name: session.project.name })) {
+      return null;
+    }
+    return session;
   }
+}
+
+function unrecognizedWarnings(adapter: Adapter, tally: Map<string, number>): string[] {
+  if (tally.size === 0) return [];
+  const total = [...tally.values()].reduce((sum, n) => sum + n, 0);
+  const shapes = [...tally]
+    .sort((a, b) => b[1] - a[1])
+    .map(([shape, n]) => `${shape}: ${n}`)
+    .join(", ");
+  return [
+    `${adapter.displayName}: skipped ${total} ${total === 1 ? "record" : "records"} sessionlore does not recognise (${shapes}). ` +
+      `${adapter.displayName} may have changed its storage format; please report this so sessionlore can read it.`,
+  ];
 }

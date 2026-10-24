@@ -55,6 +55,9 @@ describe("scan of Cursor Sessions", () => {
           endedAt: "2026-05-01T09:03:00.000Z",
           model: "claude-sonnet-5-5",
           userMessageCount: 2,
+          assistantTurnCount: 1,
+          subagentRunCount: 0,
+          tokens: { input: 10, output: 5, cacheCreation: 0, cacheRead: 0 },
         },
       ],
     });
@@ -125,7 +128,7 @@ describe("scan of Cursor Sessions", () => {
     const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
     const { session } = (await runCli(home, ["session", "parent-composer", "--json"])).json();
 
-    expect(sessions.map((s: any) => [s.id, s.userMessageCount])).toEqual([["parent-composer", 1]]);
+    expect(sessions.map((s: any) => [s.id, s.userMessageCount, s.subagentRunCount])).toEqual([["parent-composer", 1, 1]]);
     expect(session.messages.map((m: any) => m.name ?? m.text)).toEqual([
       "find where prices are rounded",
       "task_v2",
@@ -180,12 +183,13 @@ describe("scan of Cursor Sessions", () => {
     writeCursorDatabase(home, [composers[0]!, { ...composers[1]!, bubbles: [bubble.user("two"), bubble.user("and more")] }]);
     const third = (await runCli(home, ["scan", "--json"])).json();
 
-    expect(first.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 2, updated: 0, warnings: [] }]);
-    expect(second.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 0, updated: 0, warnings: [] }]);
-    expect(third.harnesses).toEqual([{ harness: "cursor", name: "Cursor", added: 0, updated: 1, warnings: [] }]);
+    const cursor = { harness: "cursor", name: "Cursor", warnings: [] };
+    expect(first.harnesses).toEqual([{ ...cursor, added: 2, updated: 0, unchanged: 0 }]);
+    expect(second.harnesses).toEqual([{ ...cursor, added: 0, updated: 0, unchanged: 2 }]);
+    expect(third.harnesses).toEqual([{ ...cursor, added: 0, updated: 1, unchanged: 1 }]);
   });
 
-  it("warns with a count about bubbles in an unknown format version, without crashing or dropping them silently", async () => {
+  it("warns with a count about bubbles in an unknown format version instead of crashing or skipping them silently", async () => {
     const repo = home.gitRepo("code/shop");
     writeCursorDatabase(home, [
       {
@@ -201,15 +205,13 @@ describe("scan of Cursor Sessions", () => {
 
     const text = await runCli(home, ["scan"]);
     expect(text.exitCode).toBe(0);
-    expect(text.stderr).toMatch(/Cursor.*2 .*unknown format version 99/i);
+    expect(text.stderr).toMatch(/Cursor: skipped 2 records .*bubble format version 99: 2/);
 
     writeCursorDatabase(home, [
       { folder: repo, createdAt: "2026-05-02T09:00:00.000Z", bubbles: [bubble.user("again", { version: 99 })] },
     ]);
     const json = (await runCli(home, ["scan", "--json"])).json();
-    expect(json.harnesses[0].warnings).toEqual([
-      { message: expect.stringMatching(/unknown format version 99/), count: 1 },
-    ]);
+    expect(json.harnesses[0].warnings).toEqual([expect.stringMatching(/skipped 1 record .*bubble format version 99: 1/)]);
   });
 
   it("gives Claude Code and Cursor Sessions in the same git repository one Project", async () => {

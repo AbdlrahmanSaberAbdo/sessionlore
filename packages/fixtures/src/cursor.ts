@@ -225,7 +225,16 @@ function bubbleValue(b: CursorBubble, bubbleId: string, at: number, model: strin
         modelInfo: { modelName: model },
       };
     case "assistant":
-      return { ...base, type: 2, text: b.text, capabilityType: null, toolFormerData: null, startedAtMs: at, completedAtMs: at };
+      return {
+        ...base,
+        type: 2,
+        text: b.text,
+        capabilityType: null,
+        toolFormerData: null,
+        tokenCount: { inputTokens: 10, outputTokens: 5 },
+        startedAtMs: at,
+        completedAtMs: at,
+      };
     case "tool":
       return {
         ...base,
