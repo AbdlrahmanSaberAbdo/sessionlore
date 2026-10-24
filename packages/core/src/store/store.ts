@@ -1,8 +1,9 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { Intent, SplitTask } from "@sessionlore/analysis";
 import type { HarnessId, HarnessSession, TokenUsage } from "../adapter.js";
 import type { ResolvedProject } from "../project.js";
-import { openDatabase, type Database } from "./database.js";
+import { openDatabase, type Database, type SqlValue } from "./database.js";
 import { migrate } from "./migrations.js";
 
 /** sessionlore's local data folder inside a home directory. */
@@ -24,6 +25,29 @@ export interface StoredSession {
   assistantTurnCount: number;
   subagentRunCount: number;
   tokens: TokenUsage;
+}
+
+/** A Session whose current content has not been analyzed yet. */
+export interface SessionToAnalyze {
+  /** Store id, for `saveAnalysis`. */
+  key: number;
+  id: string;
+  fingerprint: string;
+  project: ResolvedProject | null;
+  /** User Message texts in order. */
+  userMessages: string[];
+}
+
+export interface StoredTask {
+  title: string;
+  userMessages: { text: string; intent: Intent }[];
+}
+
+export interface SessionTasks {
+  id: string;
+  harness: HarnessId;
+  project: { name: string; path: string } | null;
+  tasks: StoredTask[];
 }
 
 export interface SaveSessionInput {
@@ -96,6 +120,7 @@ export class Store {
           sessionId,
         );
         this.db.run("DELETE FROM user_messages WHERE session_id = ?", sessionId);
+        this.db.run("DELETE FROM tasks WHERE session_id = ?", sessionId);
       } else {
         sessionId = this.db.run(
           `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, scan_fingerprint, last_scan_id,
@@ -180,6 +205,109 @@ export class Store {
         cacheRead: Number(row.cache_read_tokens),
       },
     }));
+  }
+
+  /** Sessions never analyzed, or changed since their last Analysis. */
+  sessionsToAnalyze(): SessionToAnalyze[] {
+    return this.sessionsWithMessages(
+      "WHERE s.analyzed_fingerprint IS NULL OR s.analyzed_fingerprint <> s.scan_fingerprint",
+    );
+  }
+
+  /** A stored Session with its User Messages, or null if no Session has that id. */
+  sessionWithMessages(id: string): SessionToAnalyze | null {
+    return this.sessionsWithMessages("WHERE s.external_id = ?", id)[0] ?? null;
+  }
+
+  private sessionsWithMessages(where: string, ...params: SqlValue[]): SessionToAnalyze[] {
+    const sessions = this.db.all<{
+      id: number;
+      external_id: string;
+      scan_fingerprint: string;
+      project_name: string | null;
+      project_root: string | null;
+    }>(
+      `SELECT s.id, s.external_id, s.scan_fingerprint, p.name AS project_name, p.root AS project_root
+         FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
+        ${where}
+        ORDER BY s.started_at, s.id`,
+      ...params,
+    );
+    return sessions.map((s) => ({
+      key: s.id,
+      id: s.external_id,
+      fingerprint: s.scan_fingerprint,
+      project: s.project_root && s.project_name ? { root: s.project_root, name: s.project_name } : null,
+      userMessages: this.userMessageTexts(s.id),
+    }));
+  }
+
+  /** Replaces a Session's Tasks with the result of analyzing the content identified by `fingerprint`. */
+  saveAnalysis(sessionKey: number, fingerprint: string, tasks: readonly SplitTask[]): void {
+    this.db.transaction(() => {
+      this.db.run("UPDATE user_messages SET task_id = NULL, intent = NULL WHERE session_id = ?", sessionKey);
+      this.db.run("DELETE FROM tasks WHERE session_id = ?", sessionKey);
+      tasks.forEach((task, position) => {
+        const taskId = this.db.run(
+          "INSERT INTO tasks (session_id, position, title) VALUES (?, ?, ?)",
+          sessionKey,
+          position,
+          task.title,
+        ).lastInsertRowid;
+        for (const message of task.messages) {
+          this.db.run(
+            "UPDATE user_messages SET task_id = ?, intent = ? WHERE session_id = ? AND position = ?",
+            taskId,
+            message.intent,
+            sessionKey,
+            message.index,
+          );
+        }
+      });
+      this.db.run("UPDATE sessions SET analyzed_fingerprint = ? WHERE id = ?", fingerprint, sessionKey);
+    });
+  }
+
+  /** Analyzed Sessions with their Tasks, latest Session first. */
+  listTasks(): SessionTasks[] {
+    const sessions = this.db.all<{
+      id: number;
+      external_id: string;
+      harness: string;
+      project_name: string | null;
+      project_root: string | null;
+    }>(
+      `SELECT s.id, s.external_id, s.harness, p.name AS project_name, p.root AS project_root
+         FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
+        WHERE s.analyzed_fingerprint IS NOT NULL
+        ORDER BY s.started_at DESC, s.id DESC`,
+    );
+    return sessions.map((s) => {
+      const tasks = this.db.all<{ id: number; title: string }>(
+        "SELECT id, title FROM tasks WHERE session_id = ? ORDER BY position",
+        s.id,
+      );
+      return {
+        id: s.external_id,
+        harness: s.harness as HarnessId,
+        project: s.project_root && s.project_name ? { name: s.project_name, path: s.project_root } : null,
+        tasks: tasks.map((t) => ({
+          title: t.title,
+          userMessages: this.db
+            .all<{ text: string; intent: string }>(
+              "SELECT text, intent FROM user_messages WHERE task_id = ? ORDER BY position",
+              t.id,
+            )
+            .map((m) => ({ text: m.text, intent: m.intent as Intent })),
+        })),
+      };
+    });
+  }
+
+  private userMessageTexts(sessionKey: number): string[] {
+    return this.db
+      .all<{ text: string }>("SELECT text FROM user_messages WHERE session_id = ? ORDER BY position", sessionKey)
+      .map((m) => m.text);
   }
 
   private projectId(project: ResolvedProject): number {
