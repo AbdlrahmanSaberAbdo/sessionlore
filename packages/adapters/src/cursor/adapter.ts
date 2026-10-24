@@ -4,6 +4,7 @@ import {
   openReadOnlyDatabase,
   type Adapter,
   type HarnessContext,
+  type HarnessMessage,
   type HarnessSession,
   type HarnessUserMessage,
   type ReadOnlyDatabase,
@@ -68,6 +69,7 @@ function readComposer(db: ReadOnlyDatabase, composerId: string): HarnessSession 
 
   const bubbles = readBubbles(db, composerId, data);
   const userMessages: HarnessUserMessage[] = [];
+  const messages: HarnessMessage[] = [];
   let startedAt: Date | null = null;
   let endedAt: Date | null = null;
   for (const b of bubbles) {
@@ -76,10 +78,10 @@ function readComposer(db: ReadOnlyDatabase, composerId: string): HarnessSession 
       if (!startedAt || timestamp < startedAt) startedAt = timestamp;
       if (!endedAt || timestamp > endedAt) endedAt = timestamp;
     }
-    if (b.type === 1 && timestamp) {
-      const text = typedText(b.text);
-      if (text) userMessages.push({ text, timestamp });
-    }
+    const message = toMessage(b, timestamp);
+    if (!message) continue;
+    messages.push(message);
+    if (message.role === "user" && timestamp) userMessages.push({ text: message.text, timestamp });
   }
   if (!startedAt || !endedAt) return null;
 
@@ -91,7 +93,23 @@ function readComposer(db: ReadOnlyDatabase, composerId: string): HarnessSession 
     endedAt,
     model: typeof modelConfig?.modelName === "string" ? modelConfig.modelName : null,
     userMessages,
+    messages,
   };
+}
+
+/** A bubble as a message, or null for bubbles with nothing to show (thinking, empty steps). */
+function toMessage(b: Json, timestamp: Date | null): HarnessMessage | null {
+  if (b.type === 1) {
+    const text = typedText(b.text);
+    return text ? { role: "user", text, timestamp } : null;
+  }
+  if (b.type !== 2) return null;
+  const tool = b.toolFormerData as { name?: unknown; status?: unknown } | null | undefined;
+  if (tool && typeof tool.name === "string") {
+    return { role: "tool", name: tool.name, status: typeof tool.status === "string" ? tool.status : null, timestamp };
+  }
+  const text = typeof b.text === "string" ? b.text.trim() : "";
+  return text ? { role: "assistant", text, timestamp } : null;
 }
 
 /** The composer's bubbles in conversation order, as listed in `fullConversationHeadersOnly`. */

@@ -52,9 +52,21 @@ export const migrations: readonly Migration[] = [
   },
   {
     version: 2,
-    name: "session model",
+    name: "session model and messages",
     sql: `
       ALTER TABLE sessions ADD COLUMN model TEXT;
+
+      CREATE TABLE messages (
+        id           INTEGER PRIMARY KEY,
+        session_id   INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        position     INTEGER NOT NULL,
+        role         TEXT NOT NULL,
+        text         TEXT,
+        tool_name    TEXT,
+        tool_status  TEXT,
+        timestamp    TEXT,
+        UNIQUE (session_id, position)
+      );
     `,
   },
 ];

@@ -49,4 +49,37 @@ describe("scan of Cursor Sessions", () => {
       ],
     });
   });
+
+  it("shows User Messages, assistant messages and tool calls in order", async () => {
+    const repo = home.gitRepo("code/shop");
+    const {
+      composerIds: [id],
+    } = writeCursorDatabase(home, [
+      {
+        folder: repo,
+        createdAt: "2026-05-01T09:00:00.000Z",
+        stepSeconds: 60,
+        bubbles: [
+          bubble.user("run the tests", { wrapped: true }),
+          bubble.thinking(),
+          bubble.tool("run_terminal_command_v2", "completed"),
+          bubble.tool("edit_file_v2", "rejected"),
+          bubble.assistant("All 3 tests pass."),
+          bubble.user("thanks"),
+        ],
+      },
+    ]);
+
+    await runCli(home, ["scan"]);
+    const shown = await runCli(home, ["session", id!, "--json"]);
+
+    expect(shown.exitCode).toBe(0);
+    expect(shown.json().session.messages).toEqual([
+      { role: "user", text: "run the tests", timestamp: "2026-05-01T09:00:00.000Z" },
+      { role: "tool", name: "run_terminal_command_v2", status: "completed", timestamp: "2026-05-01T09:02:00.000Z" },
+      { role: "tool", name: "edit_file_v2", status: "rejected", timestamp: "2026-05-01T09:03:00.000Z" },
+      { role: "assistant", text: "All 3 tests pass.", timestamp: "2026-05-01T09:04:00.000Z" },
+      { role: "user", text: "thanks", timestamp: "2026-05-01T09:05:00.000Z" },
+    ]);
+  });
 });

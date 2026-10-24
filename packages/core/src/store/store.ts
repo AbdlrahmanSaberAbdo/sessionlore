@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { HarnessId, HarnessSession } from "../adapter.js";
+import type { HarnessId, HarnessMessage, HarnessSession } from "../adapter.js";
 import type { ResolvedProject } from "../project.js";
 import { openDatabase, type Database } from "./database.js";
 import { migrate } from "./migrations.js";
@@ -22,6 +22,14 @@ export interface StoredSession {
   endedAt: string;
   model: string | null;
   userMessageCount: number;
+}
+
+export type StoredMessage =
+  | { role: "user" | "assistant"; text: string; timestamp: string | null }
+  | { role: "tool"; name: string; status: string | null; timestamp: string | null };
+
+export interface StoredSessionDetail extends StoredSession {
+  messages: StoredMessage[];
 }
 
 export interface SaveSessionInput {
@@ -82,6 +90,7 @@ export class Store {
           sessionId,
         );
         this.db.run("DELETE FROM user_messages WHERE session_id = ?", sessionId);
+        this.db.run("DELETE FROM messages WHERE session_id = ?", sessionId);
       } else {
         sessionId = this.db.run(
           `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, model, scan_fingerprint, last_scan_id)
@@ -106,12 +115,43 @@ export class Store {
           message.timestamp.toISOString(),
         );
       });
+      (session.messages ?? []).forEach((message, position) => this.insertMessage(sessionId, position, message));
       return { added: !existing };
     });
   }
 
+  /** One stored Session with its messages, or null if no Session has that id. */
+  getSession(externalId: string): StoredSessionDetail | null {
+    const session = this.querySessions("WHERE s.external_id = ?", externalId)[0];
+    if (!session) return null;
+    const rows = this.db.all<{
+      role: string;
+      text: string | null;
+      tool_name: string | null;
+      tool_status: string | null;
+      timestamp: string | null;
+    }>(
+      `SELECT m.role, m.text, m.tool_name, m.tool_status, m.timestamp
+         FROM messages m JOIN sessions s ON s.id = m.session_id
+        WHERE s.external_id = ? AND s.harness = ?
+        ORDER BY m.position`,
+      externalId,
+      session.harness,
+    );
+    const messages = rows.map((row): StoredMessage =>
+      row.role === "tool"
+        ? { role: "tool", name: row.tool_name ?? "", status: row.tool_status, timestamp: row.timestamp }
+        : { role: row.role as "user" | "assistant", text: row.text ?? "", timestamp: row.timestamp },
+    );
+    return { ...session, messages };
+  }
+
   /** All stored Sessions, latest first. */
   listSessions(): StoredSession[] {
+    return this.querySessions("");
+  }
+
+  private querySessions(where: string, ...params: string[]): StoredSession[] {
     const rows = this.db.all<{
       external_id: string;
       harness: string;
@@ -126,7 +166,9 @@ export class Store {
               s.started_at, s.ended_at, s.model,
               (SELECT COUNT(*) FROM user_messages m WHERE m.session_id = s.id) AS user_message_count
          FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
+        ${where}
         ORDER BY s.started_at DESC, s.id DESC`,
+      ...params,
     );
     return rows.map((row) => ({
       id: row.external_id,
@@ -137,6 +179,20 @@ export class Store {
       model: row.model,
       userMessageCount: Number(row.user_message_count),
     }));
+  }
+
+  private insertMessage(sessionId: number, position: number, message: HarnessMessage): void {
+    this.db.run(
+      `INSERT INTO messages (session_id, position, role, text, tool_name, tool_status, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      sessionId,
+      position,
+      message.role,
+      message.role === "tool" ? null : message.text,
+      message.role === "tool" ? message.name : null,
+      message.role === "tool" ? message.status : null,
+      message.timestamp?.toISOString() ?? null,
+    );
   }
 
   private projectId(project: ResolvedProject): number {

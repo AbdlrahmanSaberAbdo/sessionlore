@@ -1,7 +1,7 @@
 import type { Adapter, HarnessContext, HarnessId } from "./adapter.js";
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { resolveProject } from "./project.js";
-import { Store, type StoredSession } from "./store/store.js";
+import { Store, type StoredSession, type StoredSessionDetail } from "./store/store.js";
 
 /**
  * The application interface. The CLI and the HTTP server are thin layers over
@@ -73,5 +73,9 @@ export class App {
 
   listSessions(): StoredSession[] {
     return this.store.listSessions();
+  }
+
+  getSession(id: string): StoredSessionDetail | null {
+    return this.store.getSession(id);
   }
 }

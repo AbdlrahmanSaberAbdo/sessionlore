@@ -23,6 +23,15 @@ export interface HarnessUserMessage {
   timestamp: Date;
 }
 
+/**
+ * One message of a Session, in conversation order: something the person typed,
+ * visible assistant text, or a tool call the agent made.
+ */
+export type HarnessMessage =
+  | { role: "user"; text: string; timestamp: Date | null }
+  | { role: "assistant"; text: string; timestamp: Date | null }
+  | { role: "tool"; name: string; status: string | null; timestamp: Date | null };
+
 /** A Session read into the shape every Adapter produces. */
 export interface HarnessSession {
   externalId: string;
@@ -34,6 +43,8 @@ export interface HarnessSession {
   userMessages: HarnessUserMessage[];
   /** The model the Session ran with, if the Harness recorded one. */
   model?: string | null;
+  /** Every message in conversation order, for Harnesses whose Adapter reads them. */
+  messages?: HarnessMessage[];
 }
 
 /**

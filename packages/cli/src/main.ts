@@ -20,6 +20,8 @@ export interface CliEnvironment {
 interface CommandContext {
   app: App;
   json: boolean;
+  /** Positional arguments after the command name. */
+  args: string[];
   out(text: string): void;
 }
 
@@ -47,6 +49,20 @@ const commands: Record<string, Command> = {
       if (sessions.length === 0) return out("No Sessions stored yet. Run `sessionlore scan` first.\n");
       for (const s of sessions) {
         out(`${s.startedAt}  ${s.harness}  ${s.project?.name ?? "(no Project)"}  ${s.userMessageCount} messages  ${s.id}\n`);
+      }
+    },
+  },
+  session: {
+    summary: "Show one stored Session with its messages: session <id>",
+    run({ app, json, args, out }) {
+      const [id] = args;
+      if (!id) throw new Error("Which Session? Usage: sessionlore session <id>");
+      const session = app.getSession(id);
+      if (!session) throw new Error(`No stored Session has id ${id}. Run \`sessionlore sessions\` to list them.`);
+      if (json) return out(JSON.stringify({ session }, null, 2) + "\n");
+      out(`${session.harness}  ${session.project?.name ?? "(no Project)"}  ${session.startedAt}  ${session.model ?? ""}\n\n`);
+      for (const m of session.messages) {
+        out(m.role === "tool" ? `  [tool] ${m.name} (${m.status ?? "unknown"})\n` : `${m.role}: ${m.text}\n`);
       }
     },
   },
@@ -81,7 +97,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     return 2;
   }
 
-  const [name] = parsed.positionals;
+  const [name, ...args] = parsed.positionals;
   if (!name || parsed.values.help) {
     (name ? io.stdout : io.stderr)(usage());
     return name ? 0 : 2;
@@ -102,7 +118,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider: io.modelProvider,
       embedder: io.embedder,
     });
-    await command.run({ app, json: parsed.values.json ?? false, out: io.stdout });
+    await command.run({ app, json: parsed.values.json ?? false, args, out: io.stdout });
     return 0;
   } catch (error) {
     io.stderr(`sessionlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);
