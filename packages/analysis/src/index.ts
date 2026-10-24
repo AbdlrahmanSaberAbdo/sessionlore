@@ -1,4 +1,13 @@
-export { intents, MalformedReplyError, splitIntoTasks, taskSplitPrompt, type Intent, type SplitTask } from "./tasks.js";
+export {
+  estimateTaskSplit,
+  intents,
+  MalformedReplyError,
+  splitIntoTasks,
+  taskSplitPrompt,
+  type Intent,
+  type SplitTask,
+  type TokenCount,
+} from "./tasks.js";
 export {
   CLUSTER_SIMILARITY,
   clusterNamePrompt,

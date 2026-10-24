@@ -5,13 +5,17 @@ import { resolveProject } from "./project.js";
 import {
   applyRepeatRule,
   defaultRepeatRule,
+  estimateTaskSplit,
+  MalformedReplyError,
   nameCluster,
   placeTasks,
   splitIntoTasks,
   taskEmbeddingText,
   taskSplitPrompt,
   type RepeatRule,
+  type TokenCount,
 } from "@sessionlore/analysis";
+import { costUsd, type Prices } from "./pricing.js";
 import {
   Store,
   type ClusterTask,
@@ -38,6 +42,8 @@ export interface AppDependencies {
   projectFilter?: ProjectFilter;
   /** Defaults to 3 Tasks across 2 Sessions within 60 days. */
   repeatRule?: RepeatRule;
+  /** Model prices from the config, overriding the built-in ones. */
+  prices?: Prices;
 }
 
 /** A Cluster as `workflows` shows it. Its id is stable across Analyses. */
@@ -91,6 +97,48 @@ export interface AnalysisResult {
   /** Ids of the Sessions analyzed. */
   analyzed: string[];
   failed: { session: string; error: string }[];
+  /** Tokens the Model Provider reported, per model. */
+  usage: ModelUsage[];
+  /** True when the Analysis was stopped before every Session was processed. */
+  interrupted: boolean;
+  /** Sessions left for the next Analysis because it was interrupted (failed Sessions are not counted). */
+  remaining: number;
+}
+
+export interface AnalyzeOptions {
+  /** Stops the Analysis; Sessions already finished are kept, and the next Analysis picks up the rest. */
+  signal?: AbortSignal;
+}
+
+/** Tokens used (or expected) on one model, and what they cost. */
+export interface ModelUsage {
+  model: string;
+  tokens: TokenCount;
+  /** US dollars; null when the model's price is unknown. */
+  costUsd: number | null;
+}
+
+/** Expected token use per model for the Sessions the next Analysis would process. */
+export interface AnalysisEstimate {
+  /** Number of new or changed Sessions. */
+  sessions: number;
+  models: ModelUsage[];
+}
+
+/** Adds up tokens per model and prices them. */
+class UsageTally {
+  private readonly tokens = new Map<string, TokenCount>();
+
+  constructor(private readonly prices: Prices = {}) {}
+
+  add(model: string, tokens: TokenCount): void {
+    const total = this.tokens.get(model) ?? { input: 0, output: 0 };
+    this.tokens.set(model, { input: total.input + tokens.input, output: total.output + tokens.output });
+  }
+
+  byModel(): ModelUsage[] {
+    return [...this.tokens].map(([model, tokens]) => ({ model, tokens, costUsd: costUsd(model, tokens, this.prices) }));
+  }
 }
 
 export class App {
@@ -183,27 +231,57 @@ export class App {
     return session;
   }
 
+  /** What the next `analyze()` would send, estimated without calling the Model Provider. */
+  estimateAnalysis(): AnalysisEstimate {
+    const modelProvider = this.requireModelProvider();
+    const sessions = this.sessionsToAnalyze();
+    const usage = new UsageTally(this.deps.prices);
+    for (const session of sessions) usage.add(modelProvider.cheap.modelId, estimateTaskSplit(session.userMessages));
+    return { sessions: sessions.length, models: usage.byModel() };
+  }
+
+  private requireModelProvider(): ModelProvider {
+    if (!this.deps.modelProvider) throw new Error("No Model Provider is configured.");
+    return this.deps.modelProvider;
+  }
+
+  private sessionsToAnalyze() {
+    return this.store.sessionsToAnalyze().filter((s) => this.projectFilter.allows(s.project));
+  }
+
   /**
    * Splits every new or changed Session into Tasks and labels the Intent of
    * each User Message with the cheap model. A Session that fails is reported
    * and left for the next Analysis; the others still complete.
    */
-  async analyze(): Promise<AnalysisResult> {
-    const modelProvider = this.deps.modelProvider;
-    if (!modelProvider) throw new Error("No Model Provider is configured.");
-    const result: AnalysisResult = { analyzed: [], failed: [] };
-    const sessions = this.store.sessionsToAnalyze().filter((s) => this.projectFilter.allows(s.project));
+  async analyze(options: AnalyzeOptions = {}): Promise<AnalysisResult> {
+    const { signal } = options;
+    const modelProvider = this.requireModelProvider();
+    const model = modelProvider.cheap;
+    const usage = new UsageTally(this.deps.prices);
+    const analyzed: string[] = [];
+    const failed: AnalysisResult["failed"] = [];
+    const sessions = this.sessionsToAnalyze();
+    let done = 0;
     for (const session of sessions) {
+      if (signal?.aborted) break;
       try {
-        const tasks = await splitIntoTasks(modelProvider.cheap, session.userMessages);
+        const { tasks, tokens } = await splitIntoTasks(model, session.userMessages, signal);
+        usage.add(model.modelId, tokens);
+        // Each Session is saved on its own, so an interrupted Analysis keeps every Session finished before it.
+        if (signal?.aborted) break;
         this.store.saveAnalysis(session.key, session.fingerprint, tasks);
-        result.analyzed.push(session.id);
+        analyzed.push(session.id);
       } catch (error) {
-        result.failed.push({ session: session.id, error: error instanceof Error ? error.message : String(error) });
+        if (signal?.aborted) break;
+        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
+        failed.push({ session: session.id, error: error instanceof Error ? error.message : String(error) });
       }
+      done += 1;
     }
-    if (this.deps.embedder) await this.clusterTasks(this.deps.embedder, modelProvider);
-    return result;
+    if (this.deps.embedder && !signal?.aborted) await this.clusterTasks(this.deps.embedder, model, usage, signal);
+    const interrupted = done < sessions.length;
+    return { analyzed, failed, usage: usage.byModel(), interrupted, remaining: sessions.length - done };
   }
 
   private get repeatRule(): RepeatRule {
@@ -215,7 +293,12 @@ export class App {
    * new one (ADR 0008), and names Clusters big enough to be shown. Tasks left
    * unclustered by an interruption are picked up by the next Analysis.
    */
-  private async clusterTasks(embedder: Embedder, modelProvider: ModelProvider): Promise<void> {
+  private async clusterTasks(
+    embedder: Embedder,
+    model: ModelProvider["cheap"],
+    usage: UsageTally,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
     const toEmbed = this.store.tasksToEmbed(embedder.modelId);
     for (let i = 0; i < toEmbed.length; i += EMBED_BATCH) {
       const batch = toEmbed.slice(i, i + EMBED_BATCH);
@@ -234,9 +317,13 @@ export class App {
     // A Cluster can only be listed once it has this many Tasks, so smaller ones need no name yet.
     const showable = Math.min(NEAR_WORKFLOW_MIN_TASKS, this.repeatRule.minMembers);
     for (const cluster of this.store.unnamedClusters(showable)) {
+      if (signal?.aborted) return;
       try {
-        this.store.nameCluster(cluster.id, await nameCluster(modelProvider.cheap, cluster.taskTitles));
-      } catch {
+        const { name, tokens } = await nameCluster(model, cluster.taskTitles, signal);
+        usage.add(model.modelId, tokens);
+        this.store.nameCluster(cluster.id, name);
+      } catch (error) {
+        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
         // Left unnamed and retried by the next Analysis; listings fall back to a Task title meanwhile.
       }
     }

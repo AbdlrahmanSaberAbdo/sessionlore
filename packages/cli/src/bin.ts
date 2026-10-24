@@ -20,12 +20,37 @@ const { main } = await import("./main.js");
 const { systemClock } = await import("@sessionlore/core");
 const { localEmbedder } = await import("./local-embedder.js");
 
+const { createInterface } = await import("node:readline/promises");
+
+// The first Ctrl-C asks the command to stop cleanly, keeping finished work; a second one quits at once.
+const interrupt = new AbortController();
+process.on("SIGINT", () => {
+  if (interrupt.signal.aborted) process.exit(130);
+  process.stderr.write("\nStopping after the current step. Press Ctrl-C again to quit now.\n");
+  interrupt.abort();
+});
+
+const ask = process.stdin.isTTY
+  ? async (question: string): Promise<string> => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        return await rl.question(question, { signal: interrupt.signal });
+      } catch {
+        return "";
+      } finally {
+        rl.close();
+      }
+    }
+  : undefined;
+
 process.exitCode = await main(process.argv.slice(2), {
   homeDir: homedir(),
   env: process.env,
   nodeVersion: process.versions.node,
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
+  ask,
+  signal: interrupt.signal,
   clock: systemClock,
   embedder: localEmbedder({ homeDir: homedir(), notify: (text) => process.stderr.write(text) }),
 });

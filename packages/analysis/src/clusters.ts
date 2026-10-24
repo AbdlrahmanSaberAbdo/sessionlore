@@ -1,7 +1,7 @@
 import { generateText, NoObjectGeneratedError, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import { redact } from "./redact.js";
-import { MalformedReplyError } from "./tasks.js";
+import { MalformedReplyError, type TokenCount } from "./tasks.js";
 
 /**
  * Clusters of similar Tasks (ADR 0003), built from local embeddings (ADR 0004).
@@ -101,20 +101,32 @@ export function clusterNamePrompt(taskTitles: readonly string[]): string {
 }
 
 /** Names a Cluster from its Task titles, using `model` (the cheap model). */
-export async function nameCluster(model: Exclude<LanguageModel, string>, taskTitles: readonly string[]): Promise<string> {
+export async function nameCluster(
+  model: Exclude<LanguageModel, string>,
+  taskTitles: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ name: string; tokens: TokenCount }> {
   try {
-    const { output } = await generateText({
+    const result = await generateText({
       model,
       system: nameSystem,
       prompt: clusterNamePrompt(taskTitles),
       output: Output.object({ schema: nameSchema }),
       temperature: 0,
+      abortSignal: signal,
     });
-    return output.name.trim();
+    return { name: result.output.name.trim(), tokens: tokenCount(result.usage) };
   } catch (error) {
     if (NoObjectGeneratedError.isInstance(error)) {
-      throw new MalformedReplyError(`The Model Provider's reply did not match the expected shape: ${error.message}`);
+      throw new MalformedReplyError(
+        `The Model Provider's reply did not match the expected shape: ${error.message}`,
+        tokenCount(error.usage),
+      );
     }
     throw error;
   }
+}
+
+function tokenCount(usage: { inputTokens: number | undefined; outputTokens: number | undefined } | undefined): TokenCount {
+  return { input: usage?.inputTokens ?? 0, output: usage?.outputTokens ?? 0 };
 }

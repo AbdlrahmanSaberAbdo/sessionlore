@@ -43,7 +43,7 @@ const now = fixedClock("2026-06-01T12:00:00.000Z");
 
 async function analyze(options: RunOptions) {
   expect((await runCli(home, ["scan"], options)).exitCode).toBe(0);
-  const analysis = await runCli(home, ["analyze", "--json"], options);
+  const analysis = await runCli(home, ["analyze", "--json", "--yes"], options);
   expect(analysis.exitCode, analysis.stderr).toBe(0);
   expect(analysis.json().failed).toEqual([]);
 }

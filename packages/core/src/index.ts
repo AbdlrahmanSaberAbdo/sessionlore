@@ -11,7 +11,10 @@ export type {
 export {
   App,
   type AppDependencies,
+  type AnalysisEstimate,
   type AnalysisResult,
+  type AnalyzeOptions,
+  type ModelUsage,
   type ScanResult,
   type ScanOptions,
   type HarnessScanResult,
@@ -34,4 +37,5 @@ export {
 } from "./store/store.js";
 export { ConfigError, configPath, loadConfig, type Config } from "./config.js";
 export { ProjectFilter } from "./project-filter.js";
+export { costUsd, type ModelPrice, type Prices } from "./pricing.js";
 export { modelProviderNames, type ModelProviderName, type ModelProviderSettings } from "./model-provider-settings.js";

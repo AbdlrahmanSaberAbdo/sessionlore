@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseModelProviderSection, type ModelProviderSettings } from "./model-provider-settings.js";
 import type { RepeatRule } from "@sessionlore/analysis";
+import { parsePricesSection, type Prices } from "./pricing.js";
 import { ProjectFilter, parseProjectsSection } from "./project-filter.js";
 import { parseRepeatRuleSection } from "./repeat-rule-settings.js";
 import { dataDir } from "./store/store.js";
@@ -19,6 +20,8 @@ export interface Config {
   modelProvider: ModelProviderSettings | null;
   /** Which Clusters qualify as Workflows (and, later, which Correction Clusters earn Rules). */
   repeatRule: RepeatRule;
+  /** Model prices set by the person, overriding or adding to the built-in ones. */
+  prices: Prices;
 }
 
 /** A config file problem, with a message that names the file and the offending key. */
@@ -39,6 +42,7 @@ const sections: SectionParsers = {
   projects: parseProjectsSection,
   modelProvider: parseModelProviderSection,
   repeatRule: parseRepeatRuleSection,
+  prices: parsePricesSection,
 };
 
 export function configPath(homeDir: string): string {

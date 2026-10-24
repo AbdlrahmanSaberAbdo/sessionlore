@@ -21,6 +21,14 @@ export interface CliEnvironment {
   nodeVersion: string;
   stdout(text: string): void;
   stderr(text: string): void;
+  /**
+   * Shows `question` and resolves to the line the person types. Absent when
+   * nobody can answer (stdin is not a terminal); commands that need
+   * confirmation then require `--yes`.
+   */
+  ask?: (question: string) => Promise<string>;
+  /** Aborted when the person interrupts (Ctrl-C); long commands stop cleanly and keep finished work. */
+  signal?: AbortSignal;
   clock: Clock;
   modelProvider?: ModelProvider;
   embedder?: Embedder;
@@ -31,10 +39,18 @@ export interface CliEnvironment {
 interface CommandContext {
   app: App;
   json: boolean;
+  /** `--yes`: go ahead without asking for confirmation. */
+  yes: boolean;
+  /** Asks the person a question; absent when there is no terminal to ask on. */
+  ask?: (question: string) => Promise<string>;
+  /** Aborted when the person interrupts the command (Ctrl-C). */
+  signal?: AbortSignal;
   /** Positional arguments after the command name. */
   args: string[];
   options: { showRedacted?: string };
   modelProvider: ModelProviderResolution;
+  /** Path of the config file, for messages that tell the person what to set. */
+  configFile: string;
   warn(text: string): void;
   /** `--last N`: limit a Scan to the N most recent Sessions. */
   last?: number;
@@ -51,7 +67,7 @@ interface Command {
 const commands: Record<string, Command> = {
   analyze: {
     summary: "Split new or changed Sessions into Tasks and label each User Message's Intent",
-    async run({ app, json, options, modelProvider, out, err }) {
+    async run({ app, json, yes, ask, signal, options, modelProvider, configFile, out, err }) {
       if (options.showRedacted !== undefined) {
         const request = app.redactedRequest(options.showRedacted);
         if (request === null) {
@@ -64,13 +80,54 @@ const commands: Record<string, Command> = {
         err(modelProvider.problem);
         return 1;
       }
-      const result = await app.analyze();
-      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      const estimate = app.estimateAnalysis();
+      // With --json, stdout carries only the result; the estimate and question go to stderr.
+      const say = json ? err : out;
+      if (estimate.sessions === 0) {
+        say("No new or changed Sessions to analyze.\n");
+        if (json) out(JSON.stringify(await app.analyze(), null, 2) + "\n");
+        return;
+      }
+      say(`${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze. Estimated use:\n`);
+      for (const { model, tokens, costUsd } of estimate.models) {
+        const cost = costUsd === null ? "cost unknown" : `about ${dollars(costUsd)}`;
+        say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+      }
+      const unpriced = estimate.models.filter((m) => m.costUsd === null).map((m) => m.model);
+      if (unpriced.length > 0) say(unpricedHint(unpriced, configFile));
+      if (!yes) {
+        if (!ask) {
+          err("Analysis needs confirmation before it calls the Model Provider. Run `sessionlore analyze --yes` to go ahead.\n");
+          return 1;
+        }
+        const answer = await ask("Continue? [y/N] ");
+        if (!/^\s*y(es)?\s*$/i.test(answer)) {
+          say("Nothing analyzed.\n");
+          return;
+        }
+      }
+      const result = await app.analyze({ signal });
+      const exitCode = result.interrupted ? interruptedExitCode : undefined;
+      if (json) {
+        out(JSON.stringify(result, null, 2) + "\n");
+        return exitCode;
+      }
+      if (result.interrupted) {
+        out(
+          `Interrupted. ${result.remaining} ${plural(result.remaining, "Session")} left; ` +
+            "run `sessionlore analyze` again to pick up where this stopped.\n",
+        );
+      }
       out(`${result.analyzed.length} ${plural(result.analyzed.length, "Session")} analyzed\n`);
       if (result.failed.length > 0) {
         out(`${result.failed.length} ${plural(result.failed.length, "Session")} failed:\n`);
         for (const f of result.failed) out(`  ${f.session}: ${f.error}\n`);
       }
+      for (const { model, tokens, costUsd } of result.usage) {
+        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
+        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+      }
+      return exitCode;
     },
   },
   tasks: {
@@ -153,8 +210,24 @@ const commands: Record<string, Command> = {
   },
 };
 
+/** The conventional exit code for a command stopped by SIGINT. */
+const interruptedExitCode = 130;
+
 function plural(count: number, word: string): string {
   return count === 1 ? word : `${word}s`;
+}
+
+function count(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
+function dollars(usd: number): string {
+  return `$${usd.toFixed(2)}`;
+}
+
+function unpricedHint(models: string[], configFile: string): string {
+  const example = JSON.stringify({ prices: { [models[0]!]: { inputPerMillion: 1, outputPerMillion: 5 } } });
+  return `  sessionlore does not know the price of ${models.join(", ")}. To see costs, add US dollars per million tokens to ${configFile}:\n    ${example}\n`;
 }
 
 function firstLine(text: string): string {
@@ -168,6 +241,7 @@ function usage(): string {
     `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\n` +
     `Options:\n  --json                     Machine-readable output\n` +
     `  --last N                   scan: read only the N most recent Sessions\n` +
+    `  --yes, -y                  analyze: skip the cost estimate confirmation\n` +
     `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n`
   );
 }
@@ -187,6 +261,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       allowPositionals: true,
       options: {
         json: { type: "boolean", default: false },
+        yes: { type: "boolean", short: "y", default: false },
         help: { type: "boolean", short: "h" },
         "show-redacted": { type: "string" },
         last: { type: "string" },
@@ -232,13 +307,18 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       embedder: io.embedder,
       projectFilter: config.projects,
       repeatRule: config.repeatRule,
+      prices: config.prices,
     });
     const exitCode = await command.run({
       app,
       json: parsed.values.json ?? false,
+      yes: parsed.values.yes ?? false,
+      ask: io.ask,
+      signal: io.signal,
       args: parsed.positionals.slice(1),
       options: { showRedacted: parsed.values["show-redacted"] },
       modelProvider,
+      configFile: configPath(io.homeDir),
       last,
       out: io.stdout,
       err: io.stderr,
