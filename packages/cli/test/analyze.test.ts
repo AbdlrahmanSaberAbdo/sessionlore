@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
 import { runCli } from "./support/harness.js";
@@ -27,6 +28,30 @@ describe("analyze without a Model Provider", () => {
     expect(analyze.stderr).toContain(home.resolve(".sessionlore/config.json"));
     expect(analyze.stderr).toContain("cheapModel");
     expect(analyze.stderr).toContain("SESSIONLORE_API_KEY");
+  });
+
+  it("names the missing API key when the config file chooses a provider that needs one", async () => {
+    home.folder(".sessionlore");
+    writeFileSync(
+      home.resolve(".sessionlore/config.json"),
+      JSON.stringify({ modelProvider: { provider: "anthropic", cheapModel: "claude-haiku-4-5", strongModel: "claude-sonnet-4-5" } }),
+    );
+
+    const analyze = await runCli(home, ["analyze"]);
+
+    expect(analyze.exitCode).not.toBe(0);
+    expect(analyze.stderr).toContain("No API key found for the anthropic Model Provider");
+    expect(analyze.stderr).toContain("ANTHROPIC_API_KEY");
+  });
+
+  it("names the problem in an invalid Model Provider configuration", async () => {
+    const analyze = await runCli(home, ["analyze"], {
+      env: { SESSIONLORE_PROVIDER: "skynet", SESSIONLORE_CHEAP_MODEL: "x", SESSIONLORE_STRONG_MODEL: "y" },
+    });
+
+    expect(analyze.exitCode).not.toBe(0);
+    expect(analyze.stderr).toContain("The Model Provider configuration is invalid");
+    expect(analyze.stderr).toContain("provider");
   });
 });
 
@@ -85,6 +110,78 @@ describe("redaction", () => {
     expect(sent).toContain("[REDACTED:password]");
     expect(sent).toContain("[REDACTED:private-key]");
     expect(sent).toContain("[REDACTED:high-entropy]");
+  });
+
+  it("`analyze --show-redacted <session>` prints the redacted text that would be sent, without calling the Model Provider", async () => {
+    const session = writeSessionWithSecrets(home.gitRepo("code/shop"));
+    await runCli(home, ["scan"]);
+
+    const shown = await runCli(home, ["analyze", "--show-redacted", session.id]);
+
+    expect(shown.exitCode).toBe(0);
+    expect(shown.stdout).toContain(
+      '<message index="1">\nconnect to postgres://admin:[REDACTED:password]@db.internal:5432/shop instead\n</message>',
+    );
+    expect(shown.stdout).toContain("call the API with ANTHROPIC_API_KEY=[REDACTED:api-key]");
+    expect(shown.stdout).toContain("deploy with this key:\n[REDACTED:private-key]\nand session token [REDACTED:high-entropy]");
+    for (const secret of [apiKey, dbPassword, highEntropy]) expect(shown.stdout).not.toContain(secret);
+  });
+
+  it("`analyze --show-redacted` names an unknown Session", async () => {
+    const shown = await runCli(home, ["analyze", "--show-redacted", "no-such-session"]);
+
+    expect(shown.exitCode).not.toBe(0);
+    expect(shown.stderr).toContain("No Session with id no-such-session");
+  });
+});
+
+describe("analyze with a malformed reply", () => {
+  it("reports the failure for that Session, analyzes the others, and retries it on the next Analysis", async () => {
+    const repo = home.gitRepo("code/shop");
+    const good = writeClaudeSession(home, {
+      cwd: repo,
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [turn.user("rename the cart module")],
+    });
+    const bad = writeClaudeSession(home, {
+      cwd: repo,
+      startedAt: "2026-05-02T09:00:00.000Z",
+      turns: [turn.user("bump the node version"), turn.user("and the lockfile")],
+    });
+    const renamed = { tasks: [{ title: "Rename the cart module", messages: [{ index: 0, intent: "New Task" }] }] };
+    let badReply: object | string = "Sure! Here are the tasks: bump node, update lockfile.";
+    const provider = scriptedModelProvider((request) => (request.includes("cart") ? renamed : badReply));
+
+    await runCli(home, ["scan"]);
+    const analyze = await runCli(home, ["analyze"], { modelProvider: provider.modelProvider });
+
+    expect(analyze.exitCode).toBe(0);
+    expect(analyze.stdout).toContain("1 Session analyzed");
+    expect(analyze.stdout).toContain("1 Session failed");
+    expect(analyze.stdout).toContain(bad.id);
+    const { sessions } = (await runCli(home, ["tasks", "--json"])).json();
+    expect(sessions.map((s: any) => s.id)).toEqual([good.id]);
+
+    // A reply that leaves a User Message out is malformed too.
+    badReply = { tasks: [{ title: "Bump Node", messages: [{ index: 0, intent: "New Task" }] }] };
+    const json = (await runCli(home, ["analyze", "--json"], { modelProvider: provider.modelProvider })).json();
+    expect(json.analyzed).toEqual([]);
+    expect(json.failed).toEqual([{ session: bad.id, error: expect.stringContaining("without an Intent") }]);
+
+    badReply = {
+      tasks: [
+        {
+          title: "Bump Node",
+          messages: [
+            { index: 0, intent: "New Task" },
+            { index: 1, intent: "Follow-up" },
+          ],
+        },
+      ],
+    };
+    const retry = (await runCli(home, ["analyze", "--json"], { modelProvider: provider.modelProvider })).json();
+    expect(retry).toEqual({ analyzed: [bad.id], failed: [] });
+    expect(provider.requests()).toHaveLength(4);
   });
 });
 

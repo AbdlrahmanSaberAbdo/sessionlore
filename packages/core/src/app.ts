@@ -1,7 +1,7 @@
 import type { Adapter, HarnessContext, HarnessId } from "./adapter.js";
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { resolveProject } from "./project.js";
-import { splitIntoTasks } from "@sessionlore/analysis";
+import { splitIntoTasks, taskSplitPrompt } from "@sessionlore/analysis";
 import { Store, type SessionTasks, type StoredSession } from "./store/store.js";
 
 /**
@@ -99,6 +99,12 @@ export class App {
       }
     }
     return result;
+  }
+
+  /** The redacted text Analysis would send for a Session, or null if no Session has that id. */
+  redactedRequest(sessionId: string): string | null {
+    const messages = this.store.sessionUserMessages(sessionId);
+    return messages ? taskSplitPrompt(messages) : null;
   }
 
   listTasks(): SessionTasks[] {

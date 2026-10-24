@@ -38,7 +38,15 @@ interface Command {
 const commands: Record<string, Command> = {
   analyze: {
     summary: "Split new or changed Sessions into Tasks and label each User Message's Intent",
-    async run({ app, json, modelProvider, out, err }) {
+    async run({ app, json, options, modelProvider, out, err }) {
+      if (options.showRedacted !== undefined) {
+        const request = app.redactedRequest(options.showRedacted);
+        if (request === null) {
+          err(`No Session with id ${options.showRedacted}. Run \`sessionlore sessions\` to list them.\n`);
+          return 1;
+        }
+        return out(request + "\n");
+      }
       if (!modelProvider.ok) {
         err(modelProvider.problem);
         return 1;
