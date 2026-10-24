@@ -15,6 +15,14 @@ export interface SplitTask {
 /** The Model Provider's reply could not be used for this Session. */
 export class MalformedReplyError extends Error {
   override name = "MalformedReplyError";
+
+  /** `tokens`: what the unusable reply still cost. */
+  constructor(
+    message: string,
+    readonly tokens: TokenCount = { input: 0, output: 0 },
+  ) {
+    super(message);
+  }
 }
 
 const replySchema = z.object({
@@ -46,34 +54,70 @@ export function taskSplitPrompt(messages: readonly string[]): string {
   return messages.map((text, index) => `<message index="${index}">\n${redact(text)}\n</message>`).join("\n");
 }
 
+/** Tokens a request and its reply used, or are expected to use. */
+export interface TokenCount {
+  input: number;
+  output: number;
+}
+
+/** Rough characters per token for English text and code. */
+const charsPerToken = 4;
+/** The JSON schema and wrapping the AI SDK adds to every structured request. */
+const requestOverheadTokens = 250;
+/** Expected reply size: a Task title plus one labelled entry per User Message. */
+const replyTokensPerTask = 30;
+const replyTokensPerMessage = 15;
+
+/** The tokens splitting these User Messages into Tasks is expected to use, without calling the Model Provider. */
+export function estimateTaskSplit(messages: readonly string[]): TokenCount {
+  if (messages.length === 0) return { input: 0, output: 0 };
+  const chars = system.length + taskSplitPrompt(messages).length;
+  return {
+    input: Math.ceil(chars / charsPerToken) + requestOverheadTokens,
+    output: replyTokensPerTask + replyTokensPerMessage * messages.length,
+  };
+}
+
 /** Splits a Session into Tasks and labels the Intent of every User Message, using `model`. */
-export async function splitIntoTasks(model: Exclude<LanguageModel, string>, messages: readonly string[]): Promise<SplitTask[]> {
-  if (messages.length === 0) return [];
+export async function splitIntoTasks(
+  model: Exclude<LanguageModel, string>,
+  messages: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ tasks: SplitTask[]; tokens: TokenCount }> {
+  if (messages.length === 0) return { tasks: [], tokens: { input: 0, output: 0 } };
   let output: z.infer<typeof replySchema>;
+  let tokens: TokenCount;
   try {
-    ({ output } = await generateText({
+    const result = await generateText({
       model,
       system,
       prompt: taskSplitPrompt(messages),
       output: Output.object({ schema: replySchema }),
       temperature: 0,
-    }));
+      abortSignal: signal,
+    });
+    output = result.output;
+    tokens = tokenCount(result.usage);
   } catch (error) {
     if (NoObjectGeneratedError.isInstance(error)) {
-      throw new MalformedReplyError(`The Model Provider's reply did not match the expected shape: ${error.message}`);
+      throw new MalformedReplyError(`The Model Provider's reply did not match the expected shape: ${error.message}`, tokenCount(error.usage));
     }
     throw error;
   }
-  checkEveryMessageOnce(output.tasks, messages.length);
-  return output.tasks;
+  checkEveryMessageOnce(output.tasks, messages.length, tokens);
+  return { tasks: output.tasks, tokens };
 }
 
-function checkEveryMessageOnce(tasks: SplitTask[], count: number): void {
+function tokenCount(usage: { inputTokens: number | undefined; outputTokens: number | undefined } | undefined): TokenCount {
+  return { input: usage?.inputTokens ?? 0, output: usage?.outputTokens ?? 0 };
+}
+
+function checkEveryMessageOnce(tasks: SplitTask[], count: number, tokens: TokenCount): void {
   const seen = new Set<number>();
   for (const { index } of tasks.flatMap((t) => t.messages)) {
-    if (index < 0 || index >= count) throw new MalformedReplyError(`The reply names message ${index}, but there are only ${count}.`);
-    if (seen.has(index)) throw new MalformedReplyError(`The reply assigns message ${index} more than once.`);
+    if (index < 0 || index >= count) throw new MalformedReplyError(`The reply names message ${index}, but there are only ${count}.`, tokens);
+    if (seen.has(index)) throw new MalformedReplyError(`The reply assigns message ${index} more than once.`, tokens);
     seen.add(index);
   }
-  if (seen.size !== count) throw new MalformedReplyError(`The reply left ${count - seen.size} of ${count} messages without an Intent.`);
+  if (seen.size !== count) throw new MalformedReplyError(`The reply left ${count - seen.size} of ${count} messages without an Intent.`, tokens);
 }

@@ -2,7 +2,8 @@ import type { Adapter, HarnessContext, HarnessId, SessionSource } from "./adapte
 import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { ProjectFilter } from "./project-filter.js";
 import { resolveProject } from "./project.js";
-import { splitIntoTasks, taskSplitPrompt } from "@sessionlore/analysis";
+import { estimateTaskSplit, MalformedReplyError, splitIntoTasks, taskSplitPrompt, type TokenCount } from "@sessionlore/analysis";
+import { costUsd, type Prices } from "./pricing.js";
 import { Store, type SessionTasks, type StoredSession, type StoredSessionDetail } from "./store/store.js";
 
 /**
@@ -20,6 +21,8 @@ export interface AppDependencies {
   embedder?: Embedder;
   /** Which Projects may be stored and shown. Defaults to all of them. */
   projectFilter?: ProjectFilter;
+  /** Model prices from the config, overriding the built-in ones. */
+  prices?: Prices;
 }
 
 export interface HarnessScanResult {
@@ -48,6 +51,48 @@ export interface AnalysisResult {
   /** Ids of the Sessions analyzed. */
   analyzed: string[];
   failed: { session: string; error: string }[];
+  /** Tokens the Model Provider reported, per model. */
+  usage: ModelUsage[];
+  /** True when the Analysis was stopped before every Session was processed. */
+  interrupted: boolean;
+  /** Sessions left for the next Analysis because it was interrupted (failed Sessions are not counted). */
+  remaining: number;
+}
+
+export interface AnalyzeOptions {
+  /** Stops the Analysis; Sessions already finished are kept, and the next Analysis picks up the rest. */
+  signal?: AbortSignal;
+}
+
+/** Tokens used (or expected) on one model, and what they cost. */
+export interface ModelUsage {
+  model: string;
+  tokens: TokenCount;
+  /** US dollars; null when the model's price is unknown. */
+  costUsd: number | null;
+}
+
+/** Expected token use per model for the Sessions the next Analysis would process. */
+export interface AnalysisEstimate {
+  /** Number of new or changed Sessions. */
+  sessions: number;
+  models: ModelUsage[];
+}
+
+/** Adds up tokens per model and prices them. */
+class UsageTally {
+  private readonly tokens = new Map<string, TokenCount>();
+
+  constructor(private readonly prices: Prices = {}) {}
+
+  add(model: string, tokens: TokenCount): void {
+    const total = this.tokens.get(model) ?? { input: 0, output: 0 };
+    this.tokens.set(model, { input: total.input + tokens.input, output: total.output + tokens.output });
+  }
+
+  byModel(): ModelUsage[] {
+    return [...this.tokens].map(([model, tokens]) => ({ model, tokens, costUsd: costUsd(model, tokens, this.prices) }));
+  }
 }
 
 export class App {
@@ -140,26 +185,56 @@ export class App {
     return session;
   }
 
+  /** What the next `analyze()` would send, estimated without calling the Model Provider. */
+  estimateAnalysis(): AnalysisEstimate {
+    const modelProvider = this.requireModelProvider();
+    const sessions = this.sessionsToAnalyze();
+    const usage = new UsageTally(this.deps.prices);
+    for (const session of sessions) usage.add(modelProvider.cheap.modelId, estimateTaskSplit(session.userMessages));
+    return { sessions: sessions.length, models: usage.byModel() };
+  }
+
+  private requireModelProvider(): ModelProvider {
+    if (!this.deps.modelProvider) throw new Error("No Model Provider is configured.");
+    return this.deps.modelProvider;
+  }
+
+  private sessionsToAnalyze() {
+    return this.store.sessionsToAnalyze().filter((s) => this.projectFilter.allows(s.project));
+  }
+
   /**
    * Splits every new or changed Session into Tasks and labels the Intent of
    * each User Message with the cheap model. A Session that fails is reported
    * and left for the next Analysis; the others still complete.
    */
-  async analyze(): Promise<AnalysisResult> {
-    const modelProvider = this.deps.modelProvider;
-    if (!modelProvider) throw new Error("No Model Provider is configured.");
-    const result: AnalysisResult = { analyzed: [], failed: [] };
-    const sessions = this.store.sessionsToAnalyze().filter((s) => this.projectFilter.allows(s.project));
+  async analyze(options: AnalyzeOptions = {}): Promise<AnalysisResult> {
+    const { signal } = options;
+    const modelProvider = this.requireModelProvider();
+    const model = modelProvider.cheap;
+    const usage = new UsageTally(this.deps.prices);
+    const analyzed: string[] = [];
+    const failed: AnalysisResult["failed"] = [];
+    const sessions = this.sessionsToAnalyze();
+    let done = 0;
     for (const session of sessions) {
+      if (signal?.aborted) break;
       try {
-        const tasks = await splitIntoTasks(modelProvider.cheap, session.userMessages);
+        const { tasks, tokens } = await splitIntoTasks(model, session.userMessages, signal);
+        usage.add(model.modelId, tokens);
+        // Each Session is saved on its own, so an interrupted Analysis keeps every Session finished before it.
+        if (signal?.aborted) break;
         this.store.saveAnalysis(session.key, session.fingerprint, tasks);
-        result.analyzed.push(session.id);
+        analyzed.push(session.id);
       } catch (error) {
-        result.failed.push({ session: session.id, error: error instanceof Error ? error.message : String(error) });
+        if (signal?.aborted) break;
+        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
+        failed.push({ session: session.id, error: error instanceof Error ? error.message : String(error) });
       }
+      done += 1;
     }
-    return result;
+    const interrupted = done < sessions.length;
+    return { analyzed, failed, usage: usage.byModel(), interrupted, remaining: sessions.length - done };
   }
 
   /** The redacted text Analysis would send for a Session, or null if no Session has that id. */
