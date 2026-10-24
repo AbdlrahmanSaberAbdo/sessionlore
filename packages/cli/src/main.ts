@@ -183,6 +183,30 @@ const commands: Record<string, Command> = {
       }
     },
   },
+  corrections: {
+    summary: "List Correction Clusters (similar Corrections across all Tasks) that pass the Repeat Rule, and near ones",
+    run({ app, json, out }) {
+      const result = app.listCorrections();
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      const { minMembers, minSessions, windowDays } = result.repeatRule;
+      out(`Repeat Rule: ${minMembers} Corrections across ${minSessions} Sessions within ${windowDays} days\n`);
+      if (result.correctionClusters.length === 0 && result.nearCorrectionClusters.length === 0) {
+        return out("No Correction Clusters yet. Run `sessionlore analyze` after a few more Sessions.\n");
+      }
+      for (const c of result.correctionClusters) {
+        out(`\n${c.name}  (${c.counted.corrections} Corrections in ${c.counted.sessions} Sessions)\n`);
+        for (const m of c.corrections) out(`  ${m.at.slice(0, 10)}  ${m.harness}  ${m.session}  ${m.text}\n`);
+      }
+      if (result.nearCorrectionClusters.length > 0) out("\nNear Correction Clusters:\n");
+      for (const c of result.nearCorrectionClusters) {
+        const needs = [
+          c.needs.corrections > 0 ? `${c.needs.corrections} more ${plural(c.needs.corrections, "Correction")}` : "",
+          c.needs.sessions > 0 ? `${c.needs.sessions} more ${plural(c.needs.sessions, "Session")}` : "",
+        ].filter(Boolean);
+        out(`  ${c.name}  (needs ${needs.join(" and ")})\n`);
+      }
+    },
+  },
   sessions: {
     summary: "List stored Sessions",
     run({ app, json, out }) {
