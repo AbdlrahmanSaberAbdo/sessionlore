@@ -73,4 +73,29 @@ describe("scan of Claude Code Sessions: the tricky cases", () => {
       tokens: { input: 37, output: 63 },
     });
   });
+
+  it("excludes command wrappers, meta records and other Harness-written text from User Messages", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, {
+      cwd: repo,
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [
+        turn.command("review", "src/cart.ts"),
+        turn.meta("Base directory for this skill: /home/me/.claude/skills/review\n\nReview the file."),
+        turn.assistant("The cart looks fine."),
+        turn.user("<system-reminder>The user opened src/cart.ts</system-reminder>\nwhy is the total off by a cent?"),
+        turn.assistant("Rounding."),
+        turn.interrupted(),
+        turn.command("cost"),
+        turn.localCommandOutput("Total cost: $0.42"),
+        turn.taskNotification("Background build finished"),
+        turn.user("<system-reminder>Reminder: todo list is empty.</system-reminder>"),
+      ],
+    });
+
+    await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(sessions[0].userMessageCount).toBe(1);
+  });
 });

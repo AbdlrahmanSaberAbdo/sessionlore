@@ -169,18 +169,51 @@ function sumUsage(usages: Iterable<TokenUsage>): TokenUsage {
   return total;
 }
 
+/**
+ * Text Claude Code itself writes into user records: slash-command wrappers,
+ * local command output, interrupt markers, task events, skill bodies and
+ * subagent hand-backs. A record starting with one of these was not typed.
+ */
+const HARNESS_TEXT_PREFIXES = [
+  "<command-",
+  "<local-command-",
+  "<task-notification",
+  "<bash-",
+  "<user-memory-input",
+  "[Request interrupted",
+  "Caveat: The messages below were generated",
+  "Base directory for this skill",
+  "Another Claude session sent a message",
+];
+
+/** Blocks Claude Code or an IDE inserts around what the person typed. */
+const INJECTED_BLOCKS = /<(system-reminder|ide_opened_file|ide_selection|ide_diagnostics)>[\s\S]*?<\/\1>/g;
+
 /** The text of a user record if the person typed it, otherwise null. */
 function typedUserText(record: JsonRecord): string | null {
   if (record.isMeta === true || record.isSidechain === true) return null;
+  if (record.toolUseResult !== undefined || record.sourceToolAssistantUUID !== undefined) return null;
+  // Newer Claude Code versions say who wrote the record; older ones leave `origin` out.
+  const origin = record.origin as { kind?: unknown } | undefined;
+  if (origin && origin.kind !== "human") return null;
+
   const message = record.message as { content?: unknown } | undefined;
   const content = message?.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return null;
-
-  const texts: string[] = [];
-  for (const block of content as { type?: unknown; text?: unknown }[]) {
-    if (block?.type === "tool_result") return null; // fed back by Claude Code, not typed
-    if (block?.type === "text" && typeof block.text === "string") texts.push(block.text);
+  let raw: string;
+  if (typeof content === "string") {
+    raw = content;
+  } else if (Array.isArray(content)) {
+    const texts: string[] = [];
+    for (const block of content as { type?: unknown; text?: unknown }[]) {
+      if (block?.type === "tool_result") return null; // fed back by Claude Code, not typed
+      if (block?.type === "text" && typeof block.text === "string") texts.push(block.text);
+    }
+    raw = texts.join("\n");
+  } else {
+    return null;
   }
-  return texts.length > 0 ? texts.join("\n") : null;
+
+  if (HARNESS_TEXT_PREFIXES.some((prefix) => raw.trimStart().startsWith(prefix))) return null;
+  const text = raw.replace(INJECTED_BLOCKS, "").trim();
+  return text.length > 0 ? text : null;
 }
