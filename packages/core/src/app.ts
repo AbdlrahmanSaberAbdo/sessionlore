@@ -47,8 +47,10 @@ export class App {
     const scanId = this.store.startScan(this.deps.clock.now());
     const harnesses: HarnessScanResult[] = [];
     for (const adapter of this.deps.adapters) {
+      const storages = await adapter.discover(this.deps.harnessContext);
+      if (storages.length === 0) continue; // this Harness has no data on this machine
       let added = 0;
-      for (const storage of await adapter.discover(this.deps.harnessContext)) {
+      for (const storage of storages) {
         for await (const source of adapter.listSessions(storage)) {
           const session = await adapter.readSession(source);
           if (!session) continue;

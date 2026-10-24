@@ -43,3 +43,24 @@ export function openDatabase(path: string): Database {
     close: () => db.close(),
   };
 }
+
+/** Read access to a database sessionlore does not own, such as Harness storage. */
+export interface ReadOnlyDatabase {
+  get<T extends Row = Row>(sql: string, ...params: SqlValue[]): T | undefined;
+  all<T extends Row = Row>(sql: string, ...params: SqlValue[]): T[];
+  close(): void;
+}
+
+/**
+ * Opens a database strictly read-only. Not `immutable`, so the WAL of a
+ * database another process (e.g. a running Harness) holds open is still read.
+ */
+export function openReadOnlyDatabase(path: string): ReadOnlyDatabase {
+  const db = new DatabaseSync(path, { readOnly: true });
+  db.exec("PRAGMA busy_timeout = 5000;");
+  return {
+    get: <T extends Row>(sql: string, ...params: SqlValue[]) => db.prepare(sql).get(...params) as T | undefined,
+    all: <T extends Row>(sql: string, ...params: SqlValue[]) => db.prepare(sql).all(...params) as T[],
+    close: () => db.close(),
+  };
+}

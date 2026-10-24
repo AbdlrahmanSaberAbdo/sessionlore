@@ -20,6 +20,7 @@ export interface StoredSession {
   project: { name: string; path: string } | null;
   startedAt: string;
   endedAt: string;
+  model: string | null;
   userMessageCount: number;
 }
 
@@ -69,12 +70,13 @@ export class Store {
       if (existing) {
         sessionId = existing.id;
         this.db.run(
-          `UPDATE sessions SET project_id = ?, cwd = ?, started_at = ?, ended_at = ?,
+          `UPDATE sessions SET project_id = ?, cwd = ?, started_at = ?, ended_at = ?, model = ?,
              scan_fingerprint = ?, last_scan_id = ? WHERE id = ?`,
           projectId,
           session.cwd,
           session.startedAt.toISOString(),
           session.endedAt.toISOString(),
+          session.model ?? null,
           fingerprint,
           scanId,
           sessionId,
@@ -82,14 +84,15 @@ export class Store {
         this.db.run("DELETE FROM user_messages WHERE session_id = ?", sessionId);
       } else {
         sessionId = this.db.run(
-          `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, scan_fingerprint, last_scan_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, model, scan_fingerprint, last_scan_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           harness,
           session.externalId,
           projectId,
           session.cwd,
           session.startedAt.toISOString(),
           session.endedAt.toISOString(),
+          session.model ?? null,
           fingerprint,
           scanId,
         ).lastInsertRowid;
@@ -116,10 +119,11 @@ export class Store {
       project_root: string | null;
       started_at: string;
       ended_at: string;
+      model: string | null;
       user_message_count: number;
     }>(
       `SELECT s.external_id, s.harness, p.name AS project_name, p.root AS project_root,
-              s.started_at, s.ended_at,
+              s.started_at, s.ended_at, s.model,
               (SELECT COUNT(*) FROM user_messages m WHERE m.session_id = s.id) AS user_message_count
          FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
         ORDER BY s.started_at DESC, s.id DESC`,
@@ -130,6 +134,7 @@ export class Store {
       project: row.project_root && row.project_name ? { name: row.project_name, path: row.project_root } : null,
       startedAt: row.started_at,
       endedAt: row.ended_at,
+      model: row.model,
       userMessageCount: Number(row.user_message_count),
     }));
   }

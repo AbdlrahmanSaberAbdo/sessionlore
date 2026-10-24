@@ -1,7 +1,7 @@
 import type { Env } from "./ports.js";
 
 /** Stable identifier of a Harness, used in the store and in `--json` output. */
-export type HarnessId = "claude-code";
+export type HarnessId = "claude-code" | "cursor";
 
 export interface HarnessContext {
   homeDir: string;
@@ -32,6 +32,8 @@ export interface HarnessSession {
   endedAt: Date;
   /** Only text the person typed; never agent, subagent or Harness-injected text. */
   userMessages: HarnessUserMessage[];
+  /** The model the Session ran with, if the Harness recorded one. */
+  model?: string | null;
 }
 
 /**

@@ -46,6 +46,7 @@ export const claudeCodeAdapter: Adapter = {
     let cwd: string | null = null;
     let startedAt: Date | null = null;
     let endedAt: Date | null = null;
+    let model: string | null = null;
     const userMessages: HarnessUserMessage[] = [];
 
     for await (const record of readRecords(source.location)) {
@@ -56,6 +57,7 @@ export const claudeCodeAdapter: Adapter = {
         if (!endedAt || timestamp > endedAt) endedAt = timestamp;
       }
       if (!cwd && typeof record.cwd === "string") cwd = record.cwd;
+      if (!model && record.type === "assistant") model = assistantModel(record);
 
       if (record.type === "user" && timestamp) {
         const text = typedUserText(record);
@@ -64,7 +66,7 @@ export const claudeCodeAdapter: Adapter = {
     }
 
     if (!startedAt || !endedAt) return null;
-    return { externalId: source.externalId, cwd, startedAt, endedAt, userMessages };
+    return { externalId: source.externalId, cwd, startedAt, endedAt, model, userMessages };
   },
 };
 
@@ -87,6 +89,11 @@ function parseTimestamp(value: unknown): Date | null {
   if (typeof value !== "string") return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function assistantModel(record: JsonRecord): string | null {
+  const model = (record.message as { model?: unknown } | undefined)?.model;
+  return typeof model === "string" ? model : null;
 }
 
 /** The text of a user record if the person typed it, otherwise null. */

@@ -50,6 +50,13 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    name: "session model",
+    sql: `
+      ALTER TABLE sessions ADD COLUMN model TEXT;
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {
