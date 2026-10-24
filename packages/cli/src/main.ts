@@ -1,9 +1,12 @@
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { allAdapters } from "@sessionlore/adapters";
 import { allRenderers } from "@sessionlore/renderers";
 import {
   App,
   configPath,
+  dataDir,
   loadConfig,
   storePath,
   type Adapter,
@@ -14,6 +17,7 @@ import {
   type Renderer,
 } from "@sessionlore/core";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
+import { openInEditor } from "./editor.js";
 import { unsupportedNodeMessage } from "./node-version.js";
 
 /** Everything the CLI takes from its surroundings. Seam 1 tests supply all of it. */
@@ -38,6 +42,8 @@ export interface CliEnvironment {
   adapters?: readonly Adapter[];
   /** Defaults to every Renderer sessionlore ships. */
   renderers?: readonly Renderer[];
+  /** Opens a file in the person's editor and resolves once they close it. Defaults to $VISUAL or $EDITOR. */
+  editFile?: (path: string) => Promise<void>;
 }
 
 interface CommandContext {
@@ -56,6 +62,10 @@ interface CommandContext {
   /** Path of the config file, for messages that tell the person what to set. */
   configFile: string;
   warn(text: string): void;
+  /** Opens a file in the person's editor and resolves once they close it. */
+  editFile(path: string): Promise<void>;
+  /** sessionlore's data folder, for scratch files such as one being edited. */
+  dataDir: string;
   /** `--last N`: limit a Scan to the N most recent Sessions. */
   last?: number;
   out(text: string): void;
@@ -240,6 +250,31 @@ const commands: Record<string, Command> = {
       out(`Rejected #${suggestion.id} ${suggestion.title}.\n`);
     },
   },
+  edit: {
+    summary: "Edit a Pending Suggestion in your editor before accepting it: edit <id>",
+    async run({ app, json, args, editFile, dataDir, out, err }) {
+      const id = suggestionId(args, "edit");
+      const form = app.suggestionForm(id);
+      mkdirSync(dataDir, { recursive: true });
+      const file = join(dataDir, `suggestion-${id}.json`);
+      writeFileSync(file, JSON.stringify(form, null, 2) + "\n");
+      try {
+        await editFile(file);
+        let edited: unknown;
+        try {
+          edited = JSON.parse(readFileSync(file, "utf8"));
+        } catch (error) {
+          err(`The edited Suggestion is not valid JSON (${(error as Error).message}); nothing was saved.\n`);
+          return 1;
+        }
+        const suggestion = app.editSuggestion(id, edited);
+        if (json) return out(JSON.stringify({ suggestion }, null, 2) + "\n");
+        out(`Saved #${suggestion.id} ${suggestion.title}.\n`);
+      } finally {
+        rmSync(file, { force: true });
+      }
+    },
+  },
   corrections: {
     summary: "List Correction Clusters (similar Corrections across all Tasks) that pass the Repeat Rule, and near ones",
     run({ app, json, out }) {
@@ -410,6 +445,8 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider,
       configFile: configPath(io.homeDir),
       last,
+      editFile: io.editFile ?? ((path) => openInEditor(path, io.env)),
+      dataDir: dataDir(io.homeDir),
       out: io.stdout,
       err: io.stderr,
       warn: io.stderr,

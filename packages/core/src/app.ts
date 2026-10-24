@@ -173,6 +173,39 @@ export interface AcceptResult {
   files: RenderedFile[];
 }
 
+/** A Suggestion's editable content: `title`, `trigger`, and its kind's fields, each text or a list of text. */
+export type SuggestionForm = { title: string; trigger: string } & Record<string, string | string[]>;
+
+/** An edited Suggestion that can't be saved, e.g. because a field is missing or empty. */
+export class SuggestionEditError extends Error {
+  override name = "SuggestionEditError";
+}
+
+/** Checks an edited form against the current one: same fields, same types, no empty text. */
+function validateForm(current: SuggestionForm, edited: unknown): SuggestionForm {
+  if (typeof edited !== "object" || edited === null || Array.isArray(edited)) {
+    throw new SuggestionEditError("The edited Suggestion must be a JSON object.");
+  }
+  const fields = Object.keys(current);
+  const extra = Object.keys(edited).filter((k) => !fields.includes(k));
+  if (extra.length > 0) throw new SuggestionEditError(`Unknown ${extra.length === 1 ? "field" : "fields"}: ${extra.join(", ")}.`);
+  const result: Record<string, string | string[]> = {};
+  for (const field of fields) {
+    const value = (edited as Record<string, unknown>)[field];
+    if (Array.isArray(current[field])) {
+      const items = Array.isArray(value) && value.every((v) => typeof v === "string") ? value.map((v: string) => v.trim()) : null;
+      if (!items || items.length === 0 || items.some((v) => v === "")) {
+        throw new SuggestionEditError(`"${field}" must be a non-empty list of non-empty text.`);
+      }
+      result[field] = items;
+    } else {
+      if (typeof value !== "string" || value.trim() === "") throw new SuggestionEditError(`"${field}" must be non-empty text.`);
+      result[field] = value.trim();
+    }
+  }
+  return result as SuggestionForm;
+}
+
 /** A Suggestion id that doesn't exist, or a Suggestion not in a state that allows the action. */
 export class SuggestionStateError extends Error {
   override name = "SuggestionStateError";
@@ -581,6 +614,26 @@ export class App {
     return { suggestion: this.store.getSuggestion(id)!, files };
   }
 
+  /**
+   * A Pending Suggestion's content in the format-neutral form, as the person
+   * edits it: `title`, `trigger` and the fields of its kind (e.g. `steps`).
+   */
+  suggestionForm(id: number): SuggestionForm {
+    this.pendingSuggestion(id, "edited");
+    const { title, trigger, body } = this.store.suggestionContent(id)!;
+    return { title, trigger, ...body } as SuggestionForm;
+  }
+
+  /**
+   * Saves the person's edit of a Pending Suggestion. The form must keep every
+   * field of `suggestionForm(id)` with the same type, so this works for any kind.
+   */
+  editSuggestion(id: number, form: unknown): Suggestion {
+    const { title, trigger, ...body } = validateForm(this.suggestionForm(id), form);
+    this.store.editSuggestion(id, { title, trigger, body }, this.deps.clock.now());
+    return this.store.getSuggestion(id)!;
+  }
+
   /** Marks a Pending Suggestion Rejected; it stays in the store so it isn't proposed again. */
   rejectSuggestion(id: number): Suggestion {
     this.pendingSuggestion(id);
@@ -588,13 +641,11 @@ export class App {
     return this.store.getSuggestion(id)!;
   }
 
-  private pendingSuggestion(id: number): Suggestion {
+  private pendingSuggestion(id: number, action = "accepted or rejected"): Suggestion {
     const suggestion = this.store.getSuggestion(id);
     if (!suggestion) throw new SuggestionStateError(`No Suggestion has id ${id}.`);
     if (suggestion.state !== "Pending") {
-      throw new SuggestionStateError(
-        `Suggestion ${id} is already ${suggestion.state}; only Pending Suggestions can be accepted or rejected.`,
-      );
+      throw new SuggestionStateError(`Suggestion ${id} is already ${suggestion.state}; only Pending Suggestions can be ${action}.`);
     }
     return suggestion;
   }

@@ -300,3 +300,62 @@ describe("reject", () => {
     expect(result.stderr).toContain("already Rejected");
   });
 });
+
+describe("edit", () => {
+  it("saves what the person changes in their editor, and accept writes the edited Suggestion", async () => {
+    const { shop } = workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const edited = await runCli(home, ["edit", String(id)], {
+      ...opts,
+      editor: (text) => {
+        const form = JSON.parse(text);
+        expect(form).toEqual({ title: migrationSkill.title, trigger: migrationSkill.trigger, steps: migrationSkill.steps });
+        return JSON.stringify({ ...form, title: "Add a migration", steps: ["Create db/migrations/<n>.sql.", "Run it."] });
+      },
+    });
+
+    expect(edited.exitCode, edited.stderr).toBe(0);
+    const [suggestion] = await review();
+    expect(suggestion).toMatchObject({ id, title: "Add a migration", steps: ["Create db/migrations/<n>.sql.", "Run it."] });
+    expect((await runCli(home, ["accept", String(id)], opts)).exitCode).toBe(0);
+    const skill = readFileSync(join(shop, ".claude", "skills", "add-a-migration", "SKILL.md"), "utf8");
+    expect(skill).toContain("# Add a migration");
+    expect(skill).toContain("1. Create db/migrations/<n>.sql.\n2. Run it.\n");
+    expect(skill).not.toContain("Add a rollback");
+  });
+
+  it.each(["accept", "reject"])("won't edit a Suggestion after %s", async (action) => {
+    workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    expect((await runCli(home, [action, String(id)], opts)).exitCode).toBe(0);
+
+    const result = await runCli(home, ["edit", String(id)], opts);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/already (Accepted|Rejected); only Pending Suggestions can be edited/);
+  });
+
+  it("keeps the Suggestion unchanged when the edit isn't valid", async () => {
+    workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const broken = await runCli(home, ["edit", String(id)], { ...opts, editor: (text) => text.replace("{", "") });
+    const emptied = await runCli(home, ["edit", String(id)], {
+      ...opts,
+      editor: (text) => JSON.stringify({ ...JSON.parse(text), steps: [] }),
+    });
+
+    expect(broken.exitCode).not.toBe(0);
+    expect(broken.stderr).toContain("not valid JSON");
+    expect(emptied.exitCode).not.toBe(0);
+    expect(emptied.stderr).toContain('"steps" must be a non-empty list');
+    expect((await review())[0]).toMatchObject({ title: migrationSkill.title, steps: migrationSkill.steps });
+  });
+});

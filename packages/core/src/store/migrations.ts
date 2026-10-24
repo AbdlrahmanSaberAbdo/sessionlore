@@ -175,6 +175,23 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 9,
+    name: "suggestion edits, Scope overrides and fingerprints",
+    sql: `
+      -- Set when the person edited the Suggestion's content.
+      ALTER TABLE suggestions ADD COLUMN edited_at TEXT;
+      -- 1 when the person chose the Scope instead of keeping the default.
+      ALTER TABLE suggestions ADD COLUMN scope_overridden INTEGER NOT NULL DEFAULT 0;
+      -- JSON array of keys for the Tasks (or Corrections) it was derived from, so a later suggest can tell
+      -- whether its source changed even after a re-cluster has cleared cluster_id.
+      ALTER TABLE suggestions ADD COLUMN fingerprint TEXT NOT NULL DEFAULT '[]';
+      UPDATE suggestions SET fingerprint = (
+        SELECT json_group_array(e.harness || ':' || e.session_id || ':' || e.task_at)
+          FROM (SELECT * FROM suggestion_evidence WHERE suggestion_id = suggestions.id ORDER BY position) e
+      );
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

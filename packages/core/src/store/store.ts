@@ -87,6 +87,14 @@ export interface StoredCluster {
   tasks: ClusterTask[];
 }
 
+/** A Suggestion's content in the format-neutral form. */
+export interface SuggestionContent {
+  title: string;
+  trigger: string;
+  /** Kind-specific content, e.g. `{ steps }` for a Skill. */
+  body: Record<string, unknown>;
+}
+
 /** A Suggestion as written, before it has an id or a state. */
 export interface NewSuggestion {
   kind: SuggestionKind;
@@ -638,6 +646,27 @@ export class Store {
       "UPDATE suggestions SET state = 'Accepted', accepted_at = ?, installed_files = ? WHERE id = ?",
       at.toISOString(),
       JSON.stringify(installedFiles),
+      id,
+    );
+  }
+
+  /** A Suggestion's content in the format-neutral form: title, trigger and its kind-specific body. */
+  suggestionContent(id: number): SuggestionContent | null {
+    const row = this.db.get<{ title: string; trigger: string; body: string }>(
+      "SELECT title, trigger, body FROM suggestions WHERE id = ?",
+      id,
+    );
+    return row ? { title: row.title, trigger: row.trigger, body: JSON.parse(row.body) as Record<string, unknown> } : null;
+  }
+
+  /** Replaces a Suggestion's content with the person's edit. */
+  editSuggestion(id: number, content: SuggestionContent, at: Date): void {
+    this.db.run(
+      "UPDATE suggestions SET title = ?, trigger = ?, body = ?, edited_at = ? WHERE id = ?",
+      content.title,
+      content.trigger,
+      JSON.stringify(content.body),
+      at.toISOString(),
       id,
     );
   }

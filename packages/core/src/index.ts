@@ -24,6 +24,8 @@ export {
   type SuggestResult,
   type AcceptResult,
   SuggestionStateError,
+  SuggestionEditError,
+  type SuggestionForm,
   type CorrectionClusterView,
   type NearCorrectionClusterView,
   type CorrectionsResult,
