@@ -119,3 +119,49 @@ describe("scan of Claude Code Sessions: the tricky cases", () => {
     expect(session).toMatchObject({ userMessageCount: 2, assistantTurnCount: 2 });
   });
 });
+
+describe("incremental scan", () => {
+  it("only re-reads Sessions that changed since the last Scan", async () => {
+    const repo = home.gitRepo("code/shop");
+    const first = { cwd: repo, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("one")] };
+    const written = writeClaudeSession(home, first);
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-02T09:00:00.000Z", turns: [turn.user("two")] });
+
+    expect((await runCli(home, ["scan", "--json"])).json().harnesses[0]).toMatchObject({ added: 2, updated: 0 });
+
+    const unchanged = await runCli(home, ["scan", "--json"]);
+    expect(unchanged.json().harnesses[0]).toMatchObject({ added: 0, updated: 0, unchanged: 2 });
+
+    // The person came back to the first Session and kept going.
+    writeClaudeSession(home, {
+      ...first,
+      id: written.id,
+      turns: [...first.turns, turn.assistant("Done."), turn.user("and three")],
+    });
+    const changed = await runCli(home, ["scan"]);
+    expect(changed.stdout).toContain("Claude Code: 0 Sessions added, 1 updated, 1 unchanged");
+
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+    expect(sessions.find((s: any) => s.id === written.id).userMessageCount).toBe(2);
+  });
+
+  it("re-reads a Session when one of its subagent transcripts changes", async () => {
+    const repo = home.gitRepo("code/shop");
+    const spec = (result: string) => ({
+      cwd: repo,
+      id: "11111111-1111-4111-8111-111111111111",
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [
+        turn.user("look around"),
+        turn.subagent({ description: "Explore", prompt: "Explore the repo.", turns: [turn.assistant(result)], result }),
+      ],
+    });
+    writeClaudeSession(home, spec("short"));
+    await runCli(home, ["scan"]);
+
+    writeClaudeSession(home, spec("a much longer subagent answer"));
+    const again = await runCli(home, ["scan", "--json"]);
+
+    expect(again.json().harnesses[0]).toMatchObject({ added: 0, updated: 1 });
+  });
+});

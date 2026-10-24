@@ -58,6 +58,16 @@ export class Store {
     this.db.run("UPDATE scans SET finished_at = ? WHERE id = ?", at.toISOString(), scanId);
   }
 
+  /** The change marker a stored Session was last read with, or null if it isn't stored. */
+  sessionFingerprint(harness: HarnessId, externalId: string): string | null {
+    const row = this.db.get<{ scan_fingerprint: string }>(
+      "SELECT scan_fingerprint FROM sessions WHERE harness = ? AND external_id = ?",
+      harness,
+      externalId,
+    );
+    return row?.scan_fingerprint ?? null;
+  }
+
   /** Stores a Session read by a Scan. Returns whether it was new to the store. */
   saveSession(input: SaveSessionInput): { added: boolean } {
     const { harness, session, project, fingerprint, scanId } = input;

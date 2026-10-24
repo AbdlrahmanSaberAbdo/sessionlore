@@ -21,7 +21,12 @@ export interface AppDependencies {
 export interface HarnessScanResult {
   harness: HarnessId;
   name: string;
+  /** Sessions new to the store. */
   added: number;
+  /** Stored Sessions whose content changed since they were last read. */
+  updated: number;
+  /** Stored Sessions skipped because nothing changed since they were last read. */
+  unchanged: number;
 }
 
 export interface ScanResult {
@@ -47,9 +52,13 @@ export class App {
     const scanId = this.store.startScan(this.deps.clock.now());
     const harnesses: HarnessScanResult[] = [];
     for (const adapter of this.deps.adapters) {
-      let added = 0;
+      const counts = { added: 0, updated: 0, unchanged: 0 };
       for (const storage of await adapter.discover(this.deps.harnessContext)) {
         for await (const source of adapter.listSessions(storage)) {
+          if (this.store.sessionFingerprint(adapter.harness, source.externalId) === source.changeMarker) {
+            counts.unchanged += 1;
+            continue;
+          }
           const session = await adapter.readSession(source);
           if (!session) continue;
           const project = session.cwd ? resolveProject(session.cwd) : null;
@@ -60,10 +69,11 @@ export class App {
             fingerprint: source.changeMarker,
             scanId,
           });
-          if (result.added) added += 1;
+          if (result.added) counts.added += 1;
+          else counts.updated += 1;
         }
       }
-      harnesses.push({ harness: adapter.harness, name: adapter.displayName, added });
+      harnesses.push({ harness: adapter.harness, name: adapter.displayName, ...counts });
     }
     this.store.finishScan(scanId, this.deps.clock.now());
     return { harnesses };

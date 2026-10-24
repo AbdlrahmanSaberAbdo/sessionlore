@@ -35,7 +35,10 @@ const commands: Record<string, Command> = {
       const result = await app.scan();
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       for (const harness of result.harnesses) {
-        out(`${harness.name}: ${harness.added} ${plural(harness.added, "Session")} added\n`);
+        out(
+          `${harness.name}: ${harness.added} ${plural(harness.added, "Session")} added, ` +
+            `${harness.updated} updated, ${harness.unchanged} unchanged\n`,
+        );
       }
     },
   },

@@ -18,6 +18,12 @@ import type {
  * Session are in `<session id>/subagents/agent-<agent id>.jsonl` next to it and
  * belong to that Session. Files are only ever opened for reading.
  */
+/**
+ * Part of every change marker, so Sessions are read again after a sessionlore
+ * update changes what this Adapter reads from them. Bump it when that happens.
+ */
+const READER_VERSION = "claude-code-reader-2";
+
 export const claudeCodeAdapter: Adapter = {
   harness: "claude-code",
   displayName: "Claude Code",
@@ -40,7 +46,7 @@ export const claudeCodeAdapter: Adapter = {
         yield {
           externalId: basename(entry.name, ".jsonl"),
           location,
-          changeMarker: infos.map((info) => `${info.size}:${info.mtimeMs}`).join(","),
+          changeMarker: [READER_VERSION, ...infos.map((info) => `${info.size}:${info.mtimeMs}`)].join(","),
         };
       }
     }
