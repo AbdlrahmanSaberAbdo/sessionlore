@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { allAdapters } from "@sessionlore/adapters";
+import { allRenderers } from "@sessionlore/renderers";
 import {
   App,
   configPath,
@@ -10,6 +11,7 @@ import {
   type Embedder,
   type Env,
   type ModelProvider,
+  type Renderer,
 } from "@sessionlore/core";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
 import { unsupportedNodeMessage } from "./node-version.js";
@@ -34,6 +36,8 @@ export interface CliEnvironment {
   embedder?: Embedder;
   /** Defaults to every Adapter sessionlore ships. */
   adapters?: readonly Adapter[];
+  /** Defaults to every Renderer sessionlore ships. */
+  renderers?: readonly Renderer[];
 }
 
 interface CommandContext {
@@ -219,6 +223,59 @@ const commands: Record<string, Command> = {
       }
     },
   },
+  suggest: {
+    summary: "Write a Skill Suggestion with the strong model for each Workflow that has none",
+    async run({ app, json, signal, modelProvider, out, err }) {
+      if (!modelProvider.ok) {
+        err(modelProvider.problem);
+        return 1;
+      }
+      const result = await app.suggest({ signal });
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      out(`${result.created.length} ${plural(result.created.length, "Suggestion")} written\n`);
+      for (const f of result.failed) out(`  Workflow ${f.workflow} failed: ${f.error}\n`);
+      for (const { model, tokens, costUsd } of result.usage) {
+        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
+        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+      }
+      if (result.created.length > 0) out("Run `sessionlore review` to see them.\n");
+    },
+  },
+  review: {
+    summary: "List Pending Suggestions with their Evidence",
+    run({ app, json, out }) {
+      const suggestions = app.listSuggestions("Pending");
+      if (json) return out(JSON.stringify({ suggestions }, null, 2) + "\n");
+      if (suggestions.length === 0) return out("No Pending Suggestions. Run `sessionlore suggest` to write some.\n");
+      for (const s of suggestions) {
+        const scope = s.scope.kind === "project" ? `Project scope (${s.scope.project.name})` : "User scope";
+        out(`#${s.id}  ${s.kind === "skill" ? "Skill" : s.kind}: ${s.title}  [${scope}]\n`);
+        out(`  When: ${s.trigger}\n`);
+        s.steps.forEach((step, i) => out(`  ${i + 1}. ${step}\n`));
+        out(`  Evidence:\n`);
+        for (const e of s.evidence) out(`    ${e.task.at.slice(0, 10)}  ${e.task.title}  (Session ${e.session.id})\n`);
+        out("\n");
+      }
+      out("Accept with `sessionlore accept <id>`, or reject with `sessionlore reject <id>`.\n");
+    },
+  },
+  accept: {
+    summary: "Install a Pending Suggestion where its Scope says: accept <id>",
+    run({ app, json, args, out }) {
+      const result = app.acceptSuggestion(suggestionId(args, "accept"));
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      out(`Accepted #${result.suggestion.id} ${result.suggestion.title}. Wrote:\n`);
+      for (const file of result.files) out(`  ${file.path}\n`);
+    },
+  },
+  reject: {
+    summary: "Reject a Pending Suggestion so it isn't proposed again: reject <id>",
+    run({ app, json, args, out }) {
+      const suggestion = app.rejectSuggestion(suggestionId(args, "reject"));
+      if (json) return out(JSON.stringify({ suggestion }, null, 2) + "\n");
+      out(`Rejected #${suggestion.id} ${suggestion.title}.\n`);
+    },
+  },
   corrections: {
     summary: "List Correction Clusters (similar Corrections across all Tasks) that pass the Repeat Rule, and near ones",
     run({ app, json, out }) {
@@ -269,6 +326,14 @@ const commands: Record<string, Command> = {
     },
   },
 };
+
+function suggestionId(args: string[], command: string): number {
+  const [id] = args;
+  if (!id || !/^\d+$/.test(id)) {
+    throw new Error(`Which Suggestion? Usage: sessionlore ${command} <id>. Run \`sessionlore review\` to list them.`);
+  }
+  return Number(id);
+}
 
 /** The conventional exit code for a command stopped by SIGINT. */
 const interruptedExitCode = 130;
@@ -368,6 +433,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       projectFilter: config.projects,
       repeatRule: config.repeatRule,
       prices: config.prices,
+      renderers: io.renderers ?? allRenderers,
     });
     const exitCode = await command.run({
       app,

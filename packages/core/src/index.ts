@@ -23,10 +23,28 @@ export {
   type ClusterRef,
   type ReclusterResult,
   type WorkflowsResult,
+  type SuggestResult,
+  type AcceptResult,
+  SuggestionStateError,
   type CorrectionClusterView,
   type NearCorrectionClusterView,
   type CorrectionsResult,
 } from "./app.js";
+export {
+  defaultScope,
+  RenderError,
+  suggestionStates,
+  type Evidence,
+  type ProjectRef,
+  type RenderContext,
+  type RenderedFile,
+  type Renderer,
+  type Scope,
+  type SkillSuggestion,
+  type Suggestion,
+  type SuggestionKind,
+  type SuggestionState,
+} from "./suggestion.js";
 export { systemClock, type Clock, type Embedder, type Env, type ModelProvider, type ModelProviderModel } from "./ports.js";
 export { resolveProject, type ResolvedProject } from "./project.js";
 export { openReadOnlyDatabase, type ReadOnlyDatabase } from "./store/database.js";

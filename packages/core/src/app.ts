@@ -14,10 +14,22 @@ import {
   succession,
   taskEmbeddingText,
   taskSplitPrompt,
+  writeSkill,
   type RepeatRule,
   type RepeatRuleResult,
   type TokenCount,
 } from "@sessionlore/analysis";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import {
+  defaultScope,
+  type Evidence,
+  type RenderContext,
+  type RenderedFile,
+  type Renderer,
+  type Suggestion,
+  type SuggestionState,
+} from "./suggestion.js";
 import { costUsd, type Prices } from "./pricing.js";
 import {
   Store,
@@ -50,6 +62,8 @@ export interface AppDependencies {
   repeatRule?: RepeatRule;
   /** Model prices from the config, overriding the built-in ones. */
   prices?: Prices;
+  /** Turn Accepted Suggestions into Harness files; at least one per kind of Suggestion that can be accepted. */
+  renderers?: readonly Renderer[];
 }
 
 /** A Cluster as `workflows` shows it. Its id is stable across Analyses. */
@@ -168,6 +182,24 @@ export interface ModelUsage {
   tokens: TokenCount;
   /** US dollars; null when the model's price is unknown. */
   costUsd: number | null;
+}
+
+export interface SuggestResult {
+  /** Ids of the Suggestions written. */
+  created: number[];
+  failed: { workflow: number; error: string }[];
+  usage: ModelUsage[];
+}
+
+/** What accepting a Suggestion writes (or wrote). */
+export interface AcceptResult {
+  suggestion: Suggestion;
+  files: RenderedFile[];
+}
+
+/** A Suggestion id that doesn't exist, or a Suggestion not in a state that allows the action. */
+export class SuggestionStateError extends Error {
+  override name = "SuggestionStateError";
 }
 
 /** Expected token use per model for the Sessions the next Analysis would process. */
@@ -596,6 +628,108 @@ export class App {
       counted: { tasks: verdict.counted.members, sessions: verdict.counted.sessions },
     };
     return { view, verdict };
+  }
+
+  /**
+   * Writes a Skill Suggestion with the strong model for every Workflow that has
+   * no Suggestion yet. A Workflow whose Suggestion was Rejected gets none, so
+   * it isn't proposed again. Nothing is written outside the store.
+   */
+  async suggest(options: AnalyzeOptions = {}): Promise<SuggestResult> {
+    const { signal } = options;
+    const model = this.requireModelProvider().strong;
+    const usage = new UsageTally(this.deps.prices);
+    const result: SuggestResult = { created: [], failed: [], usage: [] };
+    const suggested = this.store.workflowsWithSuggestions("skill");
+    for (const workflow of this.listWorkflows().workflows) {
+      if (signal?.aborted) break;
+      if (suggested.has(workflow.id)) continue;
+      const evidence: Evidence[] = workflow.tasks.map((t) => ({
+        task: { title: t.title, at: t.at },
+        session: { id: t.session, harness: t.harness },
+        project: t.project,
+      }));
+      const tasks = workflow.tasks.map((t) => ({
+        title: t.title,
+        userMessages: this.store.taskMessages(t.harness, t.session, t.position),
+      }));
+      try {
+        const { skill, tokens } = await writeSkill(model, { name: workflow.name, tasks }, signal);
+        usage.add(model.modelId, tokens);
+        if (signal?.aborted) break;
+        const id = this.store.createSuggestion({
+          kind: "skill",
+          workflow: { id: workflow.id, name: workflow.name },
+          title: skill.title,
+          trigger: skill.trigger,
+          body: { steps: skill.steps },
+          scope: defaultScope(evidence),
+          evidence,
+          createdAt: this.deps.clock.now(),
+        });
+        result.created.push(id);
+      } catch (error) {
+        if (signal?.aborted) break;
+        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
+        result.failed.push({ workflow: workflow.id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    result.usage = usage.byModel();
+    return result;
+  }
+
+  /** Suggestions, oldest first, optionally only those in `state`. */
+  listSuggestions(state?: SuggestionState): Suggestion[] {
+    return this.store.listSuggestions(state);
+  }
+
+  getSuggestion(id: number): Suggestion | null {
+    return this.store.getSuggestion(id);
+  }
+
+  /** The files accepting a Pending Suggestion would write, without writing them. */
+  previewSuggestion(id: number): RenderedFile[] {
+    return this.render(this.pendingSuggestion(id));
+  }
+
+  /** Renders a Pending Suggestion, writes its files and marks it Accepted. */
+  acceptSuggestion(id: number): AcceptResult {
+    const suggestion = this.pendingSuggestion(id);
+    const files = this.render(suggestion);
+    for (const file of files) {
+      mkdirSync(dirname(file.path), { recursive: true });
+      writeFileSync(file.path, file.content);
+    }
+    this.store.markAccepted(id, this.deps.clock.now(), files.map((f) => f.path));
+    return { suggestion: this.store.getSuggestion(id)!, files };
+  }
+
+  /** Marks a Pending Suggestion Rejected; it stays in the store so it isn't proposed again. */
+  rejectSuggestion(id: number): Suggestion {
+    this.pendingSuggestion(id);
+    this.store.markRejected(id, this.deps.clock.now());
+    return this.store.getSuggestion(id)!;
+  }
+
+  private pendingSuggestion(id: number): Suggestion {
+    const suggestion = this.store.getSuggestion(id);
+    if (!suggestion) throw new SuggestionStateError(`No Suggestion has id ${id}.`);
+    if (suggestion.state !== "Pending") {
+      throw new SuggestionStateError(
+        `Suggestion ${id} is already ${suggestion.state}; only Pending Suggestions can be accepted or rejected.`,
+      );
+    }
+    return suggestion;
+  }
+
+  private render(suggestion: Suggestion): RenderedFile[] {
+    const renderers = (this.deps.renderers ?? []).filter((r) => r.kind === suggestion.kind);
+    if (renderers.length === 0) throw new Error(`No Renderer is available for ${suggestion.kind} Suggestions.`);
+    const context: RenderContext = {
+      homeDir: this.deps.harnessContext.homeDir,
+      readFile: (path) => (existsSync(path) ? readFileSync(path, "utf8") : null),
+    };
+    return renderers.flatMap((r) => r.render(suggestion, context));
   }
 
   /** The redacted text Analysis would send for a Session, or null if no Session has that id. */
