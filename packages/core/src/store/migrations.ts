@@ -190,6 +190,23 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 9,
+    name: "skill uses",
+    sql: `
+      -- Skills the agent loaded in a Session, read by Scan; matched to Accepted Suggestions when shown.
+      CREATE TABLE skill_uses (
+        id          INTEGER PRIMARY KEY,
+        session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        position    INTEGER NOT NULL,
+        name        TEXT NOT NULL,
+        base_dir    TEXT,
+        used_at     TEXT NOT NULL,
+        UNIQUE (session_id, position)
+      );
+      CREATE INDEX skill_uses_name ON skill_uses (name);
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

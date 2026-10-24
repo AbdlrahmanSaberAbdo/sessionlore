@@ -56,7 +56,7 @@ interface CommandContext {
   signal?: AbortSignal;
   /** Positional arguments after the command name. */
   args: string[];
-  options: { showRedacted?: string };
+  options: { showRedacted?: string; export: boolean; anonymize: boolean };
   modelProvider: ModelProviderResolution;
   /** Path of the config file, for messages that tell the person what to set. */
   configFile: string;
@@ -327,6 +327,19 @@ const commands: Record<string, Command> = {
       await server.close();
     },
   },
+  stats: {
+    summary: "Show how often Accepted Skills are used; --export prints shareable aggregate numbers as JSON",
+    run({ app, json, options, out }) {
+      if (options.export) return out(JSON.stringify(app.exportStats({ anonymize: options.anonymize }), null, 2) + "\n");
+      const result = app.stats();
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      if (result.skills.length === 0) out("No Accepted Skills yet.\n");
+      for (const s of result.skills) {
+        const last = s.lastUsedAt ? `, last on ${s.lastUsedAt.slice(0, 10)}` : "";
+        out(`#${s.suggestion} ${s.title}: used ${s.uses} ${plural(s.uses, "time")} since ${s.acceptedAt.slice(0, 10)}${last}\n`);
+      }
+    },
+  },
   session: {
     summary: "Show one stored Session with its messages: session <id>",
     run({ app, json, args, out }) {
@@ -396,6 +409,8 @@ function usage(): string {
     `  --last N                   scan: read only the N most recent Sessions\n` +
     `  --yes, -y                  analyze: skip the cost estimate confirmation\n` +
     `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n` +
+    `  --export                   stats: print aggregate numbers only (counts, Corrections per Task, Workflow names)\n` +
+    `  --anonymize                stats --export: replace Workflow names with neutral labels\n` +
     `  --port N                   serve: port to serve the dashboard on (default ${DEFAULT_PORT})\n` +
     `  --no-open                  serve: print the dashboard's address without opening the browser\n`
   );
@@ -451,6 +466,8 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
         help: { type: "boolean", short: "h" },
         "show-redacted": { type: "string" },
         last: { type: "string" },
+        export: { type: "boolean", default: false },
+        anonymize: { type: "boolean", default: false },
         port: { type: "string" },
         "no-open": { type: "boolean", default: false },
       },
@@ -501,7 +518,11 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       ask: io.ask,
       signal: io.signal,
       args: parsed.positionals.slice(1),
-      options: { showRedacted: parsed.values["show-redacted"] },
+      options: {
+        showRedacted: parsed.values["show-redacted"],
+        export: parsed.values.export ?? false,
+        anonymize: parsed.values.anonymize ?? false,
+      },
       modelProvider,
       configFile: configPath(io.homeDir),
       last,
