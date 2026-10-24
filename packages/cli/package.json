@@ -23,7 +23,8 @@
     "@sessionlore/adapters": "workspace:*",
     "@sessionlore/analysis": "workspace:*",
     "@sessionlore/core": "workspace:*",
-    "@sessionlore/fixtures": "workspace:*"
+    "@sessionlore/fixtures": "workspace:*",
+    "@sessionlore/renderers": "workspace:*"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.87",
