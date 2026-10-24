@@ -29,6 +29,7 @@ export type ClaudeTurn =
   | { kind: "user"; text: string }
   | { kind: "assistant"; blocks: string[]; usage: ClaudeUsage }
   | { kind: "tool"; name: string; input: Record<string, unknown>; result: string }
+  | { kind: "skill"; name: string; baseDir: string }
   | { kind: "meta"; text: string }
   | { kind: "injected"; text: string; origin?: Record<string, unknown> }
   | { kind: "subagent"; description: string; prompt: string; turns: ClaudeTurn[]; result: string }
@@ -61,6 +62,11 @@ export const turn = {
     input,
     result,
   }),
+  /**
+   * The agent invoking a Skill with the Skill tool: the tool call, its result,
+   * and the skill body Claude Code then injects, naming the folder it loaded.
+   */
+  skill: (name: string, baseDir: string): ClaudeTurn => ({ kind: "skill", name, baseDir }),
   /** Text the Harness injects into the conversation as a user record (isMeta). */
   meta: (text: string): ClaudeTurn => ({ kind: "meta", text }),
   /** The wrapper Claude Code writes as a user record when the person runs a slash command. */
@@ -238,6 +244,21 @@ export function writeClaudeSession(home: FixtureHome, spec: ClaudeSessionSpec): 
           const toolUseId = `toolu_${nextId()}`;
           assistant(transcript, [{ type: "tool_use", id: toolUseId, name: t.name, input: t.input }]);
           toolResult(transcript, toolUseId, t.result, { stdout: t.result, stderr: "", interrupted: false });
+          break;
+        }
+        case "skill": {
+          const toolUseId = `toolu_${nextId()}`;
+          assistant(transcript, [{ type: "tool_use", id: toolUseId, name: "Skill", input: { skill: t.name } }]);
+          toolResult(transcript, toolUseId, `Launching skill: ${t.name}`, { commandName: t.name, success: true });
+          push(transcript, {
+            type: "user",
+            isMeta: true,
+            sourceToolUseID: toolUseId,
+            message: {
+              role: "user",
+              content: [{ type: "text", text: `Base directory for this skill: ${t.baseDir}\n\n# ${t.name}\n\nFollow these steps.` }],
+            },
+          });
           break;
         }
         case "subagent": {

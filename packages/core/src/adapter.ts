@@ -47,6 +47,15 @@ export type HarnessMessage = (
   subagent?: string;
 };
 
+/** The agent loading a Skill during a Session, e.g. through Claude Code's Skill tool. */
+export interface HarnessSkillUse {
+  /** The name the Skill was invoked by, e.g. `write-a-migration` or `plugin:name`. */
+  name: string;
+  /** The folder the Skill was loaded from, if the Harness recorded it. */
+  baseDir: string | null;
+  timestamp: Date;
+}
+
 /** A Session read into the shape every Adapter produces. */
 export interface HarnessSession {
   externalId: string;
@@ -72,6 +81,8 @@ export interface HarnessSession {
   model?: string | null;
   /** Every message in conversation order, for Harnesses whose Adapter reads them. */
   messages?: HarnessMessage[];
+  /** Skills the agent loaded, in order, for Harnesses that have Skills. */
+  skillUses?: HarnessSkillUse[];
 }
 
 /**

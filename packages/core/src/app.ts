@@ -22,7 +22,7 @@ import {
 } from "@sessionlore/analysis";
 import { correctionsPerWeek, TOP_WORKFLOWS, type Overview } from "./overview.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import {
   defaultScope,
   type Evidence,
@@ -33,6 +33,7 @@ import {
   type SuggestionState,
 } from "./suggestion.js";
 import { costUsd, type Prices } from "./pricing.js";
+import { correctionsPerTask, type CorrectionsPerTask } from "./measuring.js";
 import {
   Store,
   type ClusterCorrection,
@@ -79,6 +80,8 @@ export interface ClusterView {
   harnesses: HarnessId[];
   /** Tasks and Sessions inside the Repeat Rule's window, which is what the rule counts. */
   counted: { tasks: number; sessions: number };
+  /** Over every Task in the Cluster, and per month the Tasks started in. */
+  correctionsPerTask: CorrectionsPerTask;
 }
 
 /** A Correction Cluster as `corrections` shows it. Its id is stable across Analyses. */
@@ -111,6 +114,49 @@ export interface CorrectionsResult {
 export interface NearWorkflowView extends ClusterView {
   /** How many more Tasks and Sessions inside the window it needs to become a Workflow. */
   needs: { tasks: number; sessions: number };
+}
+
+/** How often the agent has used an Accepted Skill since it was installed. */
+export interface SkillUsage {
+  /** The Accepted Suggestion's id. */
+  suggestion: number;
+  title: string;
+  acceptedAt: string;
+  uses: number;
+  lastUsedAt: string | null;
+  /** Ids of the Sessions it was used in, in order of first use. */
+  sessions: string[];
+}
+
+export interface StatsResult {
+  skills: SkillUsage[];
+}
+
+/**
+ * Aggregate numbers safe to share publicly: counts, averages and Workflow
+ * names only. Never User Message text, Task titles, file paths or Projects.
+ */
+export interface StatsExport {
+  exportedAt: string;
+  counts: {
+    sessions: number;
+    tasks: number;
+    corrections: number;
+    /** Clusters that pass the Repeat Rule now. */
+    workflows: number;
+    acceptedSkills: number;
+    /** Uses of Accepted Skills since they were accepted. */
+    skillUses: number;
+  };
+  /** Over every analyzed Task. */
+  correctionsPerTask: CorrectionsPerTask;
+  /** The busiest Workflows, by Tasks inside the Repeat Rule's window. */
+  topWorkflows: { name: string; tasks: number; sessions: number; correctionsPerTask: CorrectionsPerTask }[];
+}
+
+export interface StatsExportOptions {
+  /** Replace Workflow names with neutral labels ("Workflow 1", ...). */
+  anonymize?: boolean;
 }
 
 export interface WorkflowsResult {
@@ -601,6 +647,68 @@ export class App {
     return result;
   }
 
+  /** Measuring numbers: how often Accepted Skills are used. */
+  stats(): StatsResult {
+    return { skills: this.skillUsage() };
+  }
+
+  /** Aggregate numbers to share publicly; see `StatsExport` for what it leaves out. */
+  exportStats(options: StatsExportOptions = {}): StatsExport {
+    const tasks = this.store
+      .taskCorrections()
+      .filter((t) => this.projectFilter.allows(t.project && { root: t.project.path, name: t.project.name }));
+    const workflows = this.listWorkflows().workflows;
+    const skills = this.skillUsage();
+    // An unnamed Cluster's fallback name is a Task title, which is not safe to share.
+    const named = new Set(this.store.listClusters().filter((c) => c.name).map((c) => c.id));
+    return {
+      exportedAt: this.deps.clock.now().toISOString(),
+      counts: {
+        sessions: this.listSessions().length,
+        tasks: tasks.length,
+        corrections: tasks.reduce((sum, t) => sum + t.corrections, 0),
+        workflows: workflows.length,
+        acceptedSkills: skills.length,
+        skillUses: skills.reduce((sum, s) => sum + s.uses, 0),
+      },
+      correctionsPerTask: correctionsPerTask(tasks),
+      topWorkflows: workflows.slice(0, TOP_WORKFLOWS).map((w, i) => ({
+        name: options.anonymize || !named.has(w.id) ? `Workflow ${i + 1}` : w.name,
+        tasks: w.counted.tasks,
+        sessions: w.counted.sessions,
+        correctionsPerTask: w.correctionsPerTask,
+      })),
+    };
+  }
+
+  /**
+   * Uses of each Accepted Skill that Scan found since it was accepted. A use
+   * counts when it names the installed skill folder and, if the Harness
+   * recorded the folder it loaded, that folder is the installed one.
+   */
+  private skillUsage(): SkillUsage[] {
+    return this.store
+      .listSuggestions("Accepted")
+      .filter((s) => s.kind === "skill" && s.acceptedAt !== null)
+      .map((s) => {
+        const folders = s.installedFiles.map((file) => dirname(file));
+        const uses = folders.flatMap((folder) =>
+          this.store
+            .skillUses(basename(folder))
+            .filter((u) => u.at >= s.acceptedAt! && (u.baseDir === null || u.baseDir === folder)),
+        );
+        uses.sort((a, b) => a.at.localeCompare(b.at));
+        return {
+          suggestion: s.id,
+          title: s.title,
+          acceptedAt: s.acceptedAt!,
+          uses: uses.length,
+          lastUsedAt: uses.at(-1)?.at ?? null,
+          sessions: [...new Set(uses.map((u) => u.session))],
+        };
+      });
+  }
+
   /** Sessions, Tasks and Workflows at a glance, with Corrections over time. */
   overview(): Overview {
     const workflows = this.listWorkflows().workflows;
@@ -651,6 +759,7 @@ export class App {
       sessions: [...sessions.values()],
       harnesses: [...new Set(tasks.map((t) => t.harness))],
       counted: { tasks: verdict.counted.members, sessions: verdict.counted.sessions },
+      correctionsPerTask: correctionsPerTask(tasks),
     };
     return { view, verdict };
   }
