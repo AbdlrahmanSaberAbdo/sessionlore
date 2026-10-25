@@ -17,8 +17,14 @@ export interface ScriptedModelProvider {
   settings(): { temperature?: number; topP?: number; topK?: number }[];
 }
 
-/** `reply` sees the request's text and returns the structured reply (or raw text to send as-is). */
-export function scriptedModelProvider(reply: (request: string) => Reply): ScriptedModelProvider {
+/**
+ * `reply` sees the request's text and returns the structured reply (or raw text to send as-is).
+ * `names` sets the model ids, for tests about a real model (its built-in price, say).
+ */
+export function scriptedModelProvider(
+  reply: (request: string) => Reply,
+  names: { cheap: string; strong: string } = { cheap: "mock-cheap", strong: "mock-strong" },
+): ScriptedModelProvider {
   const received: string[] = [];
   const settings: { temperature?: number; topP?: number; topK?: number }[] = [];
   const model = (name: string) =>
@@ -41,7 +47,7 @@ export function scriptedModelProvider(reply: (request: string) => Reply): Script
       },
     });
   return {
-    modelProvider: { cheap: model("mock-cheap"), strong: model("mock-strong") },
+    modelProvider: { cheap: model(names.cheap), strong: model(names.strong) },
     requests: () => [...received],
     settings: () => [...settings],
   };

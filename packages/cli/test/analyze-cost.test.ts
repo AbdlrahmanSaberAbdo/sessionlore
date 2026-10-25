@@ -90,6 +90,37 @@ describe("analyze cost report", () => {
     expect(analyze.stdout).toContain("Used: mock-cheap: 20 input and 40 output tokens, $0.10");
   });
 
+  it.each([
+    // [model, input $/M, output $/M] from the providers' official list prices; 10 input and 20 output tokens each.
+    ["claude-haiku-5-5", 0.1, 0.5],
+    ["gpt-5-mini", 0.25, 2],
+    ["gpt-6.1-sol", 2, 10],
+    ["o4-mini", 1.1, 4.4],
+  ])("knows the list price of %s without any config", async (model, input, output) => {
+    writeSessions("add a checkout button");
+    const provider = scriptedModelProvider(() => oneTask, { cheap: model, strong: model });
+    await runCli(home, ["scan"]);
+
+    const result = (await runCli(home, ["analyze", "--json", "--yes"], { modelProvider: provider.modelProvider })).json();
+
+    expect(result.usage).toEqual([{ model, tokens: { input: 10, output: 20 }, costUsd: (10 * input + 20 * output) / 1_000_000 }]);
+  });
+
+  it("prices a dated snapshot like its model, unless the snapshot has its own price", async () => {
+    writeSessions("add a checkout button", "fix the flaky test");
+    const snapshot = scriptedModelProvider(() => oneTask, { cheap: "gpt-4.1-2025-04-14", strong: "gpt-4.1-2025-04-14" });
+    const ownPrice = scriptedModelProvider(() => oneTask, { cheap: "gpt-4o-2024-05-13", strong: "gpt-4o-2024-05-13" });
+    await runCli(home, ["scan", "--last", "1"]);
+
+    const first = (await runCli(home, ["analyze", "--json", "--yes"], { modelProvider: snapshot.modelProvider })).json();
+    await runCli(home, ["scan"]);
+    const second = (await runCli(home, ["analyze", "--json", "--yes"], { modelProvider: ownPrice.modelProvider })).json();
+
+    // gpt-4.1 is $2 / $8; gpt-4o-2024-05-13 is listed at $5 / $15 (gpt-4o itself is $2.50 / $10).
+    expect(first.usage[0].costUsd).toBe((10 * 2 + 20 * 8) / 1_000_000);
+    expect(second.usage[0].costUsd).toBe((10 * 5 + 20 * 15) / 1_000_000);
+  });
+
   it("reports that the cost is unknown for a model with no known price", async () => {
     writeSessions("add a checkout button");
     const provider = scriptedModelProvider(() => oneTask);

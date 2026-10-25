@@ -55,7 +55,7 @@ export SESSIONLORE_API_KEY=sk-...       # or OPENAI_API_KEY
 # SESSIONLORE_BASE_URL=...              # optional
 ```
 
-The same file also takes `projects` (`include` / `exclude` lists of project folders), `repeatRule` and `prices` sections.
+The same file also takes `projects` (`include` / `exclude` lists of project folders), `repeatRule` and `prices` sections. Cost estimates know the list prices of Anthropic's and OpenAI's models; for any other model, add `"prices": { "<model>": { "inputPerMillion": 0.5, "outputPerMillion": 1.5 } }` in US dollars, or the estimate shows "cost unknown".
 
 ### 3. Run it
 
