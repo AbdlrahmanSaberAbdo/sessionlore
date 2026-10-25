@@ -302,6 +302,8 @@ function nextSuggestion(evidence: Evidence[], prior: readonly PriorSuggestionRow
       fingerprint,
       replaces: replaced?.id,
     },
+    /** An Accepted Suggestion whose installed Skill or Rule the new one should target. */
+    updates: decision.action === "update" ? decision.id : undefined,
   };
 }
 
@@ -885,7 +887,7 @@ export class App {
       }));
       try {
         // An owned Skill that covers the Workflow is its Target; failing that, a plugin skill gets a companion.
-        const skills = (await overlaps.find("skill", workflow.name, evidence)).filter((i) => i.kind === "skill");
+        const skills = (await overlaps.find("skill", workflow.name, evidence, this.acceptedSuggestion(next.updates))).filter((i) => i.kind === "skill");
         const owned = skills.find((s) => s.plugin === null);
         const plugin = owned ? undefined : skills.find((s) => s.plugin !== null);
         const { skill, tokens } = await writeSkill(
@@ -945,7 +947,7 @@ export class App {
       if (!next) continue;
       try {
         // A line already saying this is the Rule's Target, so accepting replaces it instead of adding a second one.
-        const [line] = (await overlaps.find("rule", cluster.name, evidence)).filter((i) => i.kind === "rule");
+        const [line] = (await overlaps.find("rule", cluster.name, evidence, this.acceptedSuggestion(next.updates))).filter((i) => i.kind === "rule");
         const { rule, tokens } = await writeRule(
           model,
           {
@@ -1115,6 +1117,10 @@ export class App {
     if (renderers.length === 0) throw new Error(`No Renderer is available for ${suggestion.kind} Suggestions.`);
     const context: RenderContext = { homeDir: this.deps.harnessContext.homeDir, readFile: readText };
     return renderers.flatMap((r) => r.render(suggestion, context));
+  }
+
+  private acceptedSuggestion(id: number | undefined): Suggestion | undefined {
+    return id === undefined ? undefined : (this.store.getSuggestion(id) ?? undefined);
   }
 
   /** What Renderers read to list installed Skills and Rules: the User scope ones and those of `projects`. */

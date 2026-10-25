@@ -117,6 +117,8 @@ export interface PriorSuggestion {
 export type Regeneration =
   | { action: "create" }
   | { action: "replace"; id: number }
+  /** The source grew meaningfully since Suggestion `id` was Accepted: a new one updates what it installed. */
+  | { action: "update"; id: number }
   /** An earlier Suggestion still stands for this source. */
   | { action: "keep"; id: number };
 
@@ -124,10 +126,11 @@ export type Regeneration =
  * Decides whether a source needs a new Suggestion by comparing its current
  * members with the fingerprints of earlier ones, never by Cluster id, so it
  * holds across a re-cluster. An earlier Suggestion is for the same source when
- * at least half its members are still in it. Accepted and Rejected ones always
- * stand (a Rejected Suggestion is not proposed again); a Pending one is
- * replaced only when the source gained meaningfully many members and the
- * person hasn't edited it.
+ * at least half its members are still in it. A Rejected one always stands, so
+ * it is not proposed again. A Pending one is replaced only when the source
+ * gained meaningfully many members and the person hasn't edited it. An
+ * Accepted one is never rewritten; when the source gains meaningfully many
+ * members after it, a new Suggestion updates what it installed.
  */
 export function regeneration(fingerprint: readonly string[], prior: readonly PriorSuggestion[]): Regeneration {
   const current = new Set(fingerprint);
@@ -136,13 +139,21 @@ export function regeneration(fingerprint: readonly string[], prior: readonly Pri
     return kept > 0 && kept * 2 >= p.fingerprint.length;
   });
   if (same.length === 0) return { action: "create" };
-  const settled = same.find((p) => p.state !== "Pending");
-  if (settled) return { action: "keep", id: settled.id };
-  const latest = same.reduce((a, b) => (b.id > a.id ? b : a));
+  const rejected = same.find((p) => p.state === "Rejected");
+  if (rejected) return { action: "keep", id: rejected.id };
   const known = new Set(same.flatMap((p) => p.fingerprint));
   const added = fingerprint.filter((key) => !known.has(key)).length;
-  if (latest.edited || added < meaningfulGrowth(latest.fingerprint.length)) return { action: "keep", id: latest.id };
-  return { action: "replace", id: latest.id };
+  const newest = (ps: readonly PriorSuggestion[]) => ps.reduce((a, b) => (b.id > a.id ? b : a));
+  const pending = same.filter((p) => p.state === "Pending");
+  if (pending.length > 0) {
+    const latest = newest(pending);
+    if (latest.edited || added < meaningfulGrowth(latest.fingerprint.length)) return { action: "keep", id: latest.id };
+    return { action: "replace", id: latest.id };
+  }
+  // Only Accepted ones: never rewritten, but a source that keeps growing earns an update of what was installed.
+  const accepted = newest(same);
+  if (added < meaningfulGrowth(accepted.fingerprint.length)) return { action: "keep", id: accepted.id };
+  return { action: "update", id: accepted.id };
 }
 
 /** New members a source needs before its Pending Suggestion is rewritten: half as many again, and at least 2. */

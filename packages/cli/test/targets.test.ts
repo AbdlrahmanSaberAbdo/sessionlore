@@ -202,6 +202,56 @@ describe("an owned Skill that overlaps a Workflow", () => {
   });
 });
 
+describe("an Accepted Suggestion whose Workflow keeps growing", () => {
+  it("gets an update that targets the Skill it installed once the Workflow has grown meaningfully", async () => {
+    const shop = migrationWorkflow();
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    expect((await runCli(home, ["accept", String(id)], opts)).exitCode).toBe(0);
+    const installed = join(shop, ".claude", "skills", "write-a-database-migration", "SKILL.md");
+
+    session(shop, "2026-05-28T09:00:00.000Z", "one more database migration for invoices");
+    await analyze(opts);
+    expect((await suggest(opts)).created).toEqual([]);
+
+    session(shop, "2026-05-29T09:00:00.000Z", "database migration for refunds");
+    await analyze(opts);
+    const grown = await suggest(opts);
+
+    expect(grown.created).toHaveLength(1);
+    expect(grown.replaced).toEqual([]);
+    const [update] = await review();
+    expect(update.target).toEqual({ kind: "skill", path: installed, name: "write-a-database-migration" });
+    expect(update.evidence).toHaveLength(5);
+    expect((await suggest(opts)).created).toEqual([]);
+  });
+
+  it("gets an update that targets the line it added to CLAUDE.md", async () => {
+    const shop = home.gitRepo("code/shop");
+    session(shop, "2026-05-10T09:00:00.000Z", "fix the build", "no, use pnpm not npm to run it");
+    session(shop, "2026-05-20T09:00:00.000Z", "update the release notes", "no, we use pnpm here");
+    session(shop, "2026-05-25T09:00:00.000Z", "add a test", "no, pnpm please");
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    expect((await runCli(home, ["accept", String(id)], opts)).exitCode).toBe(0);
+
+    session(shop, "2026-05-28T09:00:00.000Z", "bump a dependency", "no, with pnpm");
+    session(shop, "2026-05-29T09:00:00.000Z", "run the linter", "no, pnpm lint");
+    await analyze(opts);
+    const grown = await suggest(opts);
+
+    expect(grown.created).toHaveLength(1);
+    const [update] = await review();
+    expect(update.target).toEqual({
+      kind: "rule",
+      path: join(shop, "CLAUDE.md"),
+      line: "- Use pnpm, never npm, to install packages and run scripts.",
+    });
+  });
+});
+
 describe("a plugin skill that overlaps a Workflow", () => {
   it("is never a Target: a companion Skill is suggested instead and the plugin's files stay untouched", async () => {
     const shop = migrationWorkflow();

@@ -1,6 +1,16 @@
 import { sep } from "node:path";
 import type { Embedder } from "./ports.js";
-import type { Evidence, InstalledContext, InstalledItem, ProjectRef, Renderer, Scope, SuggestionKind, Target } from "./suggestion.js";
+import type {
+  Evidence,
+  InstalledContext,
+  InstalledItem,
+  ProjectRef,
+  Renderer,
+  Scope,
+  Suggestion,
+  SuggestionKind,
+  Target,
+} from "./suggestion.js";
 
 /**
  * Finding the installed Skills and Rules a new Suggestion overlaps, so it
@@ -28,7 +38,9 @@ export class Overlaps {
    * Installed items of `kind` (in the Evidence's Projects or User scope) that
    * cover what `text` describes, most similar first. None without an Embedder.
    */
-  async find(kind: SuggestionKind, text: string, evidence: readonly Evidence[]): Promise<InstalledItem[]> {
+  async find(kind: SuggestionKind, text: string, evidence: readonly Evidence[], updates?: Suggestion): Promise<InstalledItem[]> {
+    const installed = updates && this.installedBy(updates);
+    if (installed) return [installed];
     if (!this.embedder) return [];
     const projects = evidenceProjects(evidence);
     const context = this.context(projects);
@@ -42,6 +54,26 @@ export class Overlaps {
       .filter((s) => s.score >= TARGET_SIMILARITY)
       .sort((a, b) => b.score - a.score)
       .map((s) => s.item);
+  }
+
+  /**
+   * The installed Skill or Rule an Accepted Suggestion put in place, if it is
+   * still there: an item in one of the files it wrote (for a Rule, the line
+   * holding its text).
+   */
+  installedBy(accepted: Suggestion): InstalledItem | undefined {
+    const projects = evidenceProjects(accepted.evidence);
+    if (accepted.scope.kind === "project") projects.push(accepted.scope.project);
+    const context = this.context(projects);
+    const files = new Set(accepted.installedFiles);
+    return this.renderers
+      .filter((r) => r.kind === accepted.kind)
+      .flatMap((r) => r.installed?.(context) ?? [])
+      .find((item) => {
+        if (!files.has(item.path)) return false;
+        if (item.kind === "skill") return item.plugin === null;
+        return accepted.kind === "rule" && item.line.includes(accepted.rule);
+      });
   }
 
   private async embed(texts: readonly string[]): Promise<void> {
