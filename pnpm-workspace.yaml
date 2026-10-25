@@ -3,3 +3,9 @@ packages:
 
 onlyBuiltDependencies:
   - esbuild
+
+# Their install scripts only fetch optional extras (CUDA libraries for
+# onnxruntime-node); embeddings run on the CPU without them.
+ignoredBuiltDependencies:
+  - onnxruntime-node
+  - protobufjs
