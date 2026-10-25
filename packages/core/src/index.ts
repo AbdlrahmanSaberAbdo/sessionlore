@@ -102,6 +102,7 @@ export {
 export { ConfigError, configPath, loadConfig, type Config } from "./config.js";
 export { ProjectFilter } from "./project-filter.js";
 export { costUsd, type ModelPrice, type Prices } from "./pricing.js";
+export { wholeNumber } from "./whole-number.js";
 export {
   completeModelProviderSettings,
   modelProviderNames,

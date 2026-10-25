@@ -6,6 +6,7 @@ import {
   type BrowseFilter,
   type HarnessId,
   type ScopeChoice,
+  wholeNumber,
 } from "@sessionlore/core";
 import { Hono, type Context, type Next } from "hono";
 
@@ -20,7 +21,8 @@ export function apiRoutes(app: App): Hono {
   api.get("/workflows", (c) => c.json(app.browseWorkflows(browseFilter(c))));
   api.get("/workflows/:id", (c) => {
     const id = c.req.param("id");
-    const workflow = /^\d+$/.test(id) ? app.browseWorkflow(Number(id), browseFilter(c)) : null;
+    const number = wholeNumber(id);
+    const workflow = number === null ? null : app.browseWorkflow(number, browseFilter(c));
     return workflow ? c.json(workflow) : c.json({ error: `No Workflow has id ${id}.` }, 404);
   });
   api.get("/mind-map", (c) => c.json(app.mindMap(browseFilter(c))));

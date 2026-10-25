@@ -20,6 +20,7 @@ import {
   type ModelProvider,
   type Renderer,
   type Scope,
+  wholeNumber,
 } from "@sessionlore/core";
 import { createServer, listen } from "@sessionlore/server";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
@@ -196,9 +197,9 @@ const commands: Record<string, Command> = {
   workflow: {
     summary: "Show one Workflow or Cluster with its Tasks: workflow <id>",
     run({ app, json, args, out }) {
-      const [id] = args;
-      if (!id || !/^\d+$/.test(id)) throw new Error("Which Workflow? Usage: sessionlore workflow <id>");
-      const workflow = app.getWorkflow(Number(id));
+      const id = wholeNumber(args[0]);
+      if (id === null) throw new Error("Which Workflow? Usage: sessionlore workflow <id>");
+      const workflow = app.getWorkflow(id);
       if (!workflow) throw new Error(`No Workflow has id ${id}. Run \`sessionlore workflows\` to list them.`);
       if (json) return out(JSON.stringify({ workflow }, null, 2) + "\n");
       out(`${workflow.name}  (${workflow.counted.tasks} Tasks in ${workflow.counted.sessions} Sessions)\n`);
@@ -538,11 +539,11 @@ function indent(text: string, prefix: string): string {
 }
 
 function suggestionId(args: string[], command: string): number {
-  const [id] = args;
-  if (!id || !/^\d+$/.test(id)) {
+  const id = wholeNumber(args[0]);
+  if (id === null) {
     throw new Error(`Which Suggestion? Usage: sessionlore ${command} <id>. Run \`sessionlore review\` to list them.`);
   }
-  return Number(id);
+  return id;
 }
 
 /** The conventional exit code for a command stopped by SIGINT. */
@@ -710,7 +711,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
 
   let last: number | undefined;
   if (parsed.values.last !== undefined) {
-    last = /^\d+$/.test(parsed.values.last) ? Number(parsed.values.last) : 0;
+    last = wholeNumber(parsed.values.last) ?? 0;
     if (last < 1) {
       io.stderr(`--last takes a positive whole number of Sessions, not "${parsed.values.last}"\n\n${usage()}`);
       return 2;
@@ -731,7 +732,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
 
   let port = DEFAULT_PORT;
   if (parsed.values.port !== undefined) {
-    port = /^\d+$/.test(parsed.values.port) ? Number(parsed.values.port) : -1;
+    port = wholeNumber(parsed.values.port) ?? -1;
     if (port < 0 || port > 65535) {
       io.stderr(`--port takes a port number from 0 to 65535, not "${parsed.values.port}"\n\n${usage()}`);
       return 2;
