@@ -18,6 +18,8 @@ npx sessionlore scan
 npx sessionlore serve
 ```
 
+To see the dashboard on a made-up history first (no Model Provider needed, your own sessions untouched): `npx sessionlore demo`.
+
 ## Principles
 
 - **Local first.** Your sessions stay on your machine. Only redacted text goes to the model provider you choose.

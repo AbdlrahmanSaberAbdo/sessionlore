@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { allAdapters } from "@sessionlore/adapters";
@@ -21,6 +22,7 @@ import {
 } from "@sessionlore/core";
 import { createServer, listen } from "@sessionlore/server";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
+import { openDemo } from "./demo.js";
 import { openInEditor } from "./editor.js";
 import { unsupportedNodeMessage } from "./node-version.js";
 
@@ -52,6 +54,8 @@ export interface CliEnvironment {
   renderers?: readonly Renderer[];
   /** Opens a file in the person's editor and resolves once they close it. Defaults to $VISUAL or $EDITOR. */
   editFile?: (path: string) => Promise<void>;
+  /** Folder `demo` creates its throwaway home directory in. Defaults to the system's temp folder. */
+  demoRoot?: string;
 }
 
 interface CommandContext {
@@ -432,6 +436,34 @@ const commands: Record<string, Command> = {
   },
 };
 
+interface StandaloneContext {
+  clock: Clock;
+  /** Folder `demo` creates its throwaway home directory in. */
+  demoRoot: string;
+  signal?: AbortSignal;
+  serve: CommandContext["serve"];
+  out(text: string): void;
+}
+
+/** Commands that never open the person's own store or config. */
+const standaloneCommands: Record<string, { summary: string; run(ctx: StandaloneContext): Promise<void> }> = {
+  demo: {
+    summary: "Open the dashboard on a made-up history; needs no Model Provider and never touches your own store",
+    async run({ clock, demoRoot, signal, serve, out }) {
+      const demo = await openDemo({ root: demoRoot, clock });
+      try {
+        const server = await listen(createServer({ app: demo.app, uiDir: serve.uiDir }), { port: serve.port });
+        out(`sessionlore demo dashboard (made-up Sessions, kept apart from your own): ${server.url}\nPress Ctrl-C to stop.\n`);
+        if (serve.open) serve.openBrowser?.(server.url);
+        await stopped(signal);
+        await server.close();
+      } finally {
+        demo.close();
+      }
+    },
+  },
+};
+
 function scopeLabel(scope: Scope): string {
   return scope.kind === "project" ? `Project scope (${scope.project.name})` : "User scope";
 }
@@ -500,7 +532,7 @@ function firstLine(text: string): string {
 }
 
 function usage(): string {
-  const lines = Object.entries(commands).map(([name, c]) => `  ${name.padEnd(10)} ${c.summary}`);
+  const lines = Object.entries({ ...commands, ...standaloneCommands }).map(([name, c]) => `  ${name.padEnd(10)} ${c.summary}`);
   return (
     `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\n` +
     `Options:\n  --json                     Machine-readable output\n` +
@@ -509,8 +541,8 @@ function usage(): string {
     `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n` +
     `  --export                   stats: print aggregate numbers only (counts, Corrections per Task, Workflow names)\n` +
     `  --anonymize                stats --export: replace Workflow names with neutral labels\n` +
-    `  --port N                   serve: port to serve the dashboard on (default ${DEFAULT_PORT})\n` +
-    `  --no-open                  serve: print the dashboard's address without opening the browser\n`
+    `  --port N                   serve, demo: port to serve the dashboard on (default ${DEFAULT_PORT})\n` +
+    `  --no-open                  serve, demo: print the dashboard's address without opening the browser\n`
   );
 }
 
@@ -581,7 +613,8 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     return name ? 0 : 2;
   }
   const command = commands[name];
-  if (!command) {
+  const standalone = standaloneCommands[name];
+  if (!command && !standalone) {
     io.stderr(`Unknown command: ${name}\n\n${usage()}`);
     return 2;
   }
@@ -604,12 +637,23 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     }
   }
 
+  const serve = { port, open: !parsed.values["no-open"], openBrowser: io.openBrowser, uiDir: io.uiDir };
+  if (standalone) {
+    try {
+      await standalone.run({ clock: io.clock, demoRoot: io.demoRoot ?? tmpdir(), signal: io.signal, serve, out: io.stdout });
+      return 0;
+    } catch (error) {
+      io.stderr(`sessionlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+
   let app: App | undefined;
   try {
     const opened = openConfiguredApp(io);
     app = opened.app;
     const { modelProvider } = opened;
-    const exitCode = await command.run({
+    const exitCode = await command!.run({
       app,
       json: parsed.values.json ?? false,
       yes: parsed.values.yes ?? false,
@@ -626,7 +670,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       last,
       editFile: io.editFile ?? ((path) => openInEditor(path, io.env)),
       dataDir: dataDir(io.homeDir),
-      serve: { port, open: !parsed.values["no-open"], openBrowser: io.openBrowser, uiDir: io.uiDir },
+      serve,
       out: io.stdout,
       err: io.stderr,
       warn: io.stderr,

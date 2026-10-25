@@ -33,6 +33,8 @@ export interface RunOptions {
   openBrowser?: (url: string) => void;
   /** Folder of built UI files `serve` serves. */
   uiDir?: string;
+  /** Folder `demo` creates its throwaway home directory in. */
+  demoRoot?: string;
 }
 
 export interface CliResult {
@@ -86,6 +88,7 @@ export async function runCli(home: FixtureHome, args: string[], options: RunOpti
     embedder: options.embedder,
     openBrowser: options.openBrowser,
     uiDir: options.uiDir,
+    demoRoot: options.demoRoot,
   });
   return {
     exitCode,
