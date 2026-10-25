@@ -102,4 +102,10 @@ export {
 export { ConfigError, configPath, loadConfig, type Config } from "./config.js";
 export { ProjectFilter } from "./project-filter.js";
 export { costUsd, type ModelPrice, type Prices } from "./pricing.js";
-export { modelProviderNames, type ModelProviderName, type ModelProviderSettings } from "./model-provider-settings.js";
+export {
+  completeModelProviderSettings,
+  modelProviderNames,
+  type CompleteModelProviderSettings,
+  type ModelProviderName,
+  type ModelProviderSettings,
+} from "./model-provider-settings.js";
