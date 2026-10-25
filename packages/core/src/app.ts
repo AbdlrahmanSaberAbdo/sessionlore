@@ -458,6 +458,11 @@ export class App {
     return this.deps.projectFilter ?? ProjectFilter.allowAll();
   }
 
+  /** Whether something stored with this Project (null for none) may be shown under the Project filter. */
+  private shows(project: { name: string; path: string } | null): boolean {
+    return this.projectFilter.allows(project && { root: project.path, name: project.name });
+  }
+
   close(): void {
     this.store.close();
   }
@@ -528,12 +533,12 @@ export class App {
     // Filtered here too, so a Project excluded since the last Scan is never shown.
     return this.store
       .listSessions()
-      .filter((s) => this.projectFilter.allows(s.project && { root: s.project.path, name: s.project.name }));
+      .filter((s) => this.shows(s.project));
   }
 
   getSession(id: string): StoredSessionDetail | null {
     const session = this.store.getSession(id);
-    if (!session || !this.projectFilter.allows(session.project && { root: session.project.path, name: session.project.name })) {
+    if (!session || !this.shows(session.project)) {
       return null;
     }
     return session;
@@ -824,64 +829,76 @@ export class App {
 
   /** Correction Clusters that pass the Repeat Rule now, and those close to passing. */
   listCorrections(): CorrectionsResult {
-    const rule = this.repeatRule;
     const now = this.deps.clock.now();
-    const result: CorrectionsResult = { repeatRule: rule, correctionClusters: [], nearCorrectionClusters: [] };
-    for (const cluster of this.store.listCorrectionClusters()) {
-      const corrections = cluster.corrections.filter((c) =>
-        this.projectFilter.allows(c.project && { root: c.project.path, name: c.project.name }),
-      );
-      if (corrections.length === 0) continue;
-      const verdict = applyRepeatRule(
-        corrections.map((c) => ({ session: c.session, at: new Date(c.at) })),
-        rule,
-        now,
-      );
-      const sessions = new Map<string, CorrectionClusterView["sessions"][number]>();
-      for (const c of corrections) {
-        if (!sessions.has(c.session)) sessions.set(c.session, { id: c.session, harness: c.harness, project: c.project });
-      }
+    const judged = this.store.listCorrectionClusters().flatMap((cluster) => {
+      const members = this.judgeMembers(cluster.corrections, now);
+      if (!members) return [];
+      const { shown: corrections, verdict, sessions, harnesses } = members;
       const view: CorrectionClusterView = {
         id: cluster.id,
         name: cluster.name ?? corrections[0]!.text,
         corrections,
-        sessions: [...sessions.values()],
-        harnesses: [...new Set(corrections.map((c) => c.harness))],
+        sessions,
+        harnesses,
         counted: { corrections: verdict.counted.members, sessions: verdict.counted.sessions },
       };
-      if (verdict.passes) result.correctionClusters.push(view);
-      else if (verdict.counted.members >= this.showableSize) {
-        result.nearCorrectionClusters.push({
-          ...view,
-          needs: { corrections: verdict.needs.members, sessions: verdict.needs.sessions },
-        });
-      }
-    }
-    const busiestFirst = (a: CorrectionClusterView, b: CorrectionClusterView) =>
-      b.counted.corrections - a.counted.corrections || a.id - b.id;
-    result.correctionClusters.sort(busiestFirst);
-    result.nearCorrectionClusters.sort(busiestFirst);
-    return result;
+      return [{ view, verdict }];
+    });
+    const { passing, near } = this.byRepeatRule(judged);
+    return {
+      repeatRule: this.repeatRule,
+      correctionClusters: passing,
+      nearCorrectionClusters: near.map(({ view, needs }) => ({ ...view, needs: { corrections: needs.members, sessions: needs.sessions } })),
+    };
   }
 
   /** Clusters that pass the Repeat Rule now, and those close to passing. */
   listWorkflows(): WorkflowsResult {
-    const rule = this.repeatRule;
     const now = this.deps.clock.now();
-    const result: WorkflowsResult = { repeatRule: rule, workflows: [], nearWorkflows: [] };
-    for (const cluster of this.store.listClusters()) {
-      const judged = this.clusterView(cluster, now);
-      if (!judged) continue;
-      const { view, verdict } = judged;
-      if (verdict.passes) result.workflows.push(view);
-      else if (verdict.counted.members >= this.showableSize) {
-        result.nearWorkflows.push({ ...view, needs: { tasks: verdict.needs.members, sessions: verdict.needs.sessions } });
-      }
-    }
-    const busiestFirst = (a: ClusterView, b: ClusterView) => b.counted.tasks - a.counted.tasks || a.id - b.id;
-    result.workflows.sort(busiestFirst);
-    result.nearWorkflows.sort(busiestFirst);
-    return result;
+    const judged = this.store.listClusters().flatMap((cluster) => this.clusterView(cluster, now) ?? []);
+    const { passing, near } = this.byRepeatRule(judged);
+    return {
+      repeatRule: this.repeatRule,
+      workflows: passing,
+      nearWorkflows: near.map(({ view, needs }) => ({ ...view, needs: { tasks: needs.members, sessions: needs.sessions } })),
+    };
+  }
+
+  /**
+   * A Cluster's members that may be shown, judged by the Repeat Rule, with the
+   * distinct Sessions (in order of their first member) and Harnesses they come
+   * from. Null when none may be shown.
+   */
+  private judgeMembers<M extends { session: string; harness: HarnessId; project: { name: string; path: string } | null; at: string }>(
+    members: readonly M[],
+    now: Date,
+  ) {
+    const shown = members.filter((m) => this.shows(m.project));
+    if (shown.length === 0) return null;
+    const verdict = applyRepeatRule(
+      shown.map((m) => ({ session: m.session, at: new Date(m.at) })),
+      this.repeatRule,
+      now,
+    );
+    const sessions = new Map<string, ClusterView["sessions"][number]>();
+    for (const m of shown) if (!sessions.has(m.session)) sessions.set(m.session, { id: m.session, harness: m.harness, project: m.project });
+    return { shown, verdict, sessions: [...sessions.values()], harnesses: [...new Set(shown.map((m) => m.harness))] };
+  }
+
+  /**
+   * Splits judged Clusters into those that pass the Repeat Rule and those near
+   * passing (enough members inside the window to be shown), each busiest first.
+   */
+  private byRepeatRule<V extends { id: number }>(judged: readonly { view: V; verdict: RepeatRuleResult }[]) {
+    const busiestFirst = (a: { view: V; verdict: RepeatRuleResult }, b: { view: V; verdict: RepeatRuleResult }) =>
+      b.verdict.counted.members - a.verdict.counted.members || a.view.id - b.view.id;
+    const sorted = [...judged].sort(busiestFirst);
+    return {
+      passing: sorted.filter((j) => j.verdict.passes).map((j) => j.view),
+      near: sorted
+        .filter((j) => !j.verdict.passes && j.verdict.counted.members >= this.showableSize)
+        .map((j) => ({ view: j.view, needs: j.verdict.needs })),
+    };
   }
 
   /**
@@ -1094,7 +1111,7 @@ export class App {
   exportStats(options: StatsExportOptions = {}): StatsExport {
     const tasks = this.store
       .taskCorrections()
-      .filter((t) => this.projectFilter.allows(t.project && { root: t.project.path, name: t.project.name }));
+      .filter((t) => this.shows(t.project));
     const workflows = this.listWorkflows().workflows;
     const skills = this.skillUsage();
     // An unnamed Cluster's fallback name is a Task title, which is not safe to share.
@@ -1152,7 +1169,7 @@ export class App {
     const workflows = this.listWorkflows().workflows;
     const messages = this.store
       .analyzedUserMessages()
-      .filter((m) => this.projectFilter.allows(m.project && { root: m.project.path, name: m.project.name }));
+      .filter((m) => this.shows(m.project));
     return {
       counts: {
         sessions: this.listSessions().length,
@@ -1185,21 +1202,15 @@ export class App {
   }
 
   private clusterView(cluster: StoredCluster, now: Date): { view: ClusterView; verdict: RepeatRuleResult } | null {
-    const tasks = cluster.tasks.filter((t) => this.projectFilter.allows(t.project && { root: t.project.path, name: t.project.name }));
-    if (tasks.length === 0) return null;
-    const verdict = applyRepeatRule(
-      tasks.map((t) => ({ session: t.session, at: new Date(t.at) })),
-      this.repeatRule,
-      now,
-    );
-    const sessions = new Map<string, ClusterView["sessions"][number]>();
-    for (const t of tasks) if (!sessions.has(t.session)) sessions.set(t.session, { id: t.session, harness: t.harness, project: t.project });
+    const members = this.judgeMembers(cluster.tasks, now);
+    if (!members) return null;
+    const { shown: tasks, verdict, sessions, harnesses } = members;
     const view: ClusterView = {
       id: cluster.id,
       name: cluster.name ?? tasks[0]!.title,
       tasks,
-      sessions: [...sessions.values()],
-      harnesses: [...new Set(tasks.map((t) => t.harness))],
+      sessions,
+      harnesses,
       counted: { tasks: verdict.counted.members, sessions: verdict.counted.sessions },
       correctionsPerTask: correctionsPerTask(tasks),
     };
@@ -1579,7 +1590,7 @@ export class App {
   listTasks(): SessionTasks[] {
     return this.store
       .listTasks()
-      .filter((s) => this.projectFilter.allows(s.project && { root: s.project.path, name: s.project.name }));
+      .filter((s) => this.shows(s.project));
   }
 }
 
