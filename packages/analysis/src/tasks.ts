@@ -104,7 +104,6 @@ export async function splitIntoTasks(
       system,
       prompt: taskSplitPrompt(messages),
       output: Output.object({ schema: replySchema }),
-      temperature: 0,
       abortSignal: signal,
     });
     output = result.output;

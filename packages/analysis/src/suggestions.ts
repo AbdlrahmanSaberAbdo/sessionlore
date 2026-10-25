@@ -167,7 +167,6 @@ async function generate<T>(
       system,
       prompt,
       output: Output.object({ schema }),
-      temperature: 0,
       abortSignal: signal,
     });
     return { output: result.output as T, tokens: tokenCount(result.usage) };

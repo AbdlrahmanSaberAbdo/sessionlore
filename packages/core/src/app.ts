@@ -262,7 +262,15 @@ export interface AnalysisResult {
 export interface AnalyzeOptions {
   /** Stops the Analysis; Sessions already finished are kept, and the next Analysis picks up the rest. */
   signal?: AbortSignal;
+  /** Told after each step, so a caller can show how far along the work is. */
+  onProgress?: (progress: Progress) => void;
 }
+
+/** How far an Analysis or a Suggestion run has got. */
+export type Progress =
+  | { step: "sessions"; done: number; total: number }
+  | { step: "grouping" }
+  | { step: "suggestions"; done: number; total: number };
 
 /** Tokens used (or expected) on one model, and what they cost. */
 export interface ModelUsage {
@@ -606,7 +614,7 @@ export class App {
    * and left for the next Analysis; the others still complete.
    */
   async analyze(options: AnalyzeOptions = {}): Promise<AnalysisResult> {
-    const { signal } = options;
+    const { signal, onProgress } = options;
     const modelProvider = this.requireModelProvider();
     const model = modelProvider.cheap;
     const usage = new UsageTally(this.deps.prices);
@@ -629,7 +637,9 @@ export class App {
         failed.push({ session: session.id, error: error instanceof Error ? error.message : String(error) });
       }
       done += 1;
+      onProgress?.({ step: "sessions", done, total: sessions.length });
     }
+    if (this.deps.embedder && !signal?.aborted) onProgress?.({ step: "grouping" });
     if (this.deps.embedder && !signal?.aborted) await this.clusterTasks(this.deps.embedder, model, usage, signal);
     if (this.deps.embedder && !signal?.aborted) await this.clusterCorrections(this.deps.embedder, model, usage, signal);
     const interrupted = done < sessions.length;
@@ -1241,12 +1251,16 @@ export class App {
    * again. Nothing is written outside the store.
    */
   async suggest(options: AnalyzeOptions = {}): Promise<SuggestResult> {
-    const { signal } = options;
+    const { signal, onProgress } = options;
     const model = this.requireModelProvider().strong;
     const usage = new UsageTally(this.deps.prices);
     const result: SuggestResult = { created: [], replaced: [], failed: [], usage: [] };
-    for (const plan of await this.suggestionPlans(signal)) {
+    const plans = await this.suggestionPlans(signal);
+    let done = 0;
+    for (const plan of plans) {
       if (signal?.aborted) break;
+      if (done > 0) onProgress?.({ step: "suggestions", done, total: plans.length });
+      done += 1;
       const source = plan.kind === "skill" ? { workflow: plan.workflow.id } : { correctionCluster: plan.cluster.id };
       try {
         if (plan.error !== undefined || plan.input === null) throw plan.error;
@@ -1286,6 +1300,7 @@ export class App {
         result.failed.push({ ...source, error: error instanceof Error ? error.message : String(error) });
       }
     }
+    if (done > 0 && !signal?.aborted) onProgress?.({ step: "suggestions", done, total: plans.length });
     result.usage = usage.byModel();
     return result;
   }

@@ -119,7 +119,9 @@ describe("run", { timeout: SLOW }, () => {
     expect(result.stdout).toContain("3 Sessions to analyze. Estimated use:");
     expect(result.stdout).toContain("  mock-cheap: about");
     // Before Analysis no Workflow exists yet: the 3 new Tasks can form at most one Workflow and one Correction Cluster.
-    expect(result.stdout).toContain("Then up to 2 Suggestions to write (an upper bound: which Workflows and Correction Clusters pass the Repeat Rule is only known after Analysis). Estimated use, at most:");
+    expect(result.stdout).toContain(
+      "Then one Suggestion for each Workflow and repeated Correction the Analysis finds, at most 2 (how many is only known after Analysis). Estimated use, at most:",
+    );
     expect(result.stdout).toContain("  mock-strong: about");
     expect(result.stdout).toContain("Sessions: 3 added, 0 updated\n");
     expect(result.stdout).toContain("Tasks: 3\n");
@@ -142,6 +144,28 @@ describe("run", { timeout: SLOW }, () => {
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout.match(/Continue\? \[y\/N\]/g)).toHaveLength(1);
     expect(result.stdout).toContain("Suggestions written: 1\n");
+  });
+
+  it("sends no sampling settings, so models that reject them (newer Claude, OpenAI reasoning models) work", async () => {
+    repeatedWorkflow();
+    const provider = modelProvider();
+
+    const run = await served(["run", "--yes"], options(provider));
+    await run.stop();
+
+    expect(provider.settings().length).toBeGreaterThan(0);
+    for (const s of provider.settings()) expect(s).toEqual({ temperature: undefined, topP: undefined, topK: undefined });
+  });
+
+  it("shows its progress in a terminal", async () => {
+    repeatedWorkflow();
+
+    const run = await served(["run"], { ...options(), answers: ["y"] });
+    const result = await run.stop();
+
+    expect(result.stderr).toContain("Analyzed 3 of 3 Sessions");
+    expect(result.stderr).toContain("Grouping similar Tasks and Corrections");
+    expect(result.stderr).toContain("Wrote 1 of 1 Suggestion");
   });
 
   it("calls no model and serves nothing when the person declines", async () => {

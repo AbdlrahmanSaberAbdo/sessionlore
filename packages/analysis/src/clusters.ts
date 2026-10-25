@@ -199,7 +199,6 @@ async function nameGroup(
       system,
       prompt,
       output: Output.object({ schema }),
-      temperature: 0,
       abortSignal: signal,
     });
     return { name: result.output.name.trim(), tokens: tokenCount(result.usage) };

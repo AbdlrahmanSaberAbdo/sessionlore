@@ -20,6 +20,7 @@ import {
   type Env,
   type HarnessId,
   type ModelUsage,
+  type Progress,
   type ModelProvider,
   type Renderer,
   type Scope,
@@ -134,7 +135,7 @@ const commands: Record<string, Command> = {
         declined: "Nothing analyzed.",
       });
       if (go !== true) return go;
-      const result = await app.analyze({ signal });
+      const result = await app.analyze({ signal, onProgress: progressLine(ctx) });
       const exitCode = result.interrupted ? interruptedExitCode : undefined;
       if (json) {
         out(JSON.stringify(result, null, 2) + "\n");
@@ -208,8 +209,8 @@ const commands: Record<string, Command> = {
             toAnalyze > 0
               ? {
                   headline:
-                    `Then up to ${toSuggest} ${plural(toSuggest, "Suggestion")} to write (an upper bound: which Workflows ` +
-                    "and Correction Clusters pass the Repeat Rule is only known after Analysis)",
+                    "Then one Suggestion for each Workflow and repeated Correction the Analysis finds, " +
+                    `at most ${toSuggest} (how many is only known after Analysis)${perSuggestion(estimate.suggestions)}`,
                   models: estimate.suggestions.models,
                   atMost: true,
                 }
@@ -219,7 +220,7 @@ const commands: Record<string, Command> = {
         const go = await confirmSpend(ctx, { parts, what: "Analysis", command: "run", declined: "Nothing analyzed." });
         if (go !== true) return go;
         if (toAnalyze > 0) {
-          analysis = await app.analyze({ signal });
+          analysis = await app.analyze({ signal, onProgress: progressLine(ctx) });
           if (analysis.interrupted) {
             say(
               `Interrupted. ${analysis.analyzed.length} ${plural(analysis.analyzed.length, "Session")} analyzed and kept, ` +
@@ -229,7 +230,7 @@ const commands: Record<string, Command> = {
             return interruptedExitCode;
           }
         }
-        suggested = await app.suggest({ signal });
+        suggested = await app.suggest({ signal, onProgress: progressLine(ctx) });
         if (signal?.aborted) {
           say(`Interrupted. ${suggested.created.length} ${plural(suggested.created.length, "Suggestion")} written and kept.\n`);
           reportUsage(say, totalUsage(analysis?.usage ?? [], suggested.usage));
@@ -356,7 +357,7 @@ const commands: Record<string, Command> = {
         declined: "Nothing written.",
       });
       if (go !== true) return go;
-      const result = await app.suggest({ signal });
+      const result = await app.suggest({ signal, onProgress: progressLine(ctx) });
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       out(`${result.created.length} ${plural(result.created.length, "Suggestion")} written\n`);
       for (const f of result.failed) out(`  ${failedSource(f)} failed: ${f.error}\n`);
@@ -696,6 +697,21 @@ async function confirmSpend(
 /** What a Scan read, per Harness, with any warnings. */
 const SEE_HELP = "Run `sessionlore --help` for every command and option.\n";
 
+/**
+ * Shows how far an Analysis or Suggestion run has got, on one stderr line that
+ * rewrites itself. Only in a terminal: piped and `--json` output stay clean.
+ */
+function progressLine({ ask, err }: CommandContext): ((progress: Progress) => void) | undefined {
+  if (!ask) return undefined;
+  return (progress) => {
+    if (progress.step === "grouping") return err("Grouping similar Tasks and Corrections…\n");
+    const noun = progress.step === "sessions" ? "Session" : "Suggestion";
+    const verb = progress.step === "sessions" ? "Analyzed" : "Wrote";
+    const end = progress.done === progress.total ? "\n" : "";
+    err(`\r${verb} ${progress.done} of ${progress.total} ${plural(progress.total, noun)}${end}`);
+  };
+}
+
 function reportScan(result: ScanResult, out: (text: string) => void, warn: (text: string) => void): void {
   if (result.harnesses.length === 0) {
     out("No Claude Code or Cursor Sessions found on this machine.\n");
@@ -734,6 +750,13 @@ function failedSource(f: SuggestResult["failed"][number]): string {
 }
 
 /** The tokens and cost a command actually used, per model. */
+/** ", about $0.004 each" when every model's price is known, so the upper bound reads as a ceiling, not a forecast. */
+function perSuggestion({ suggestions, models }: { suggestions: number; models: ModelUsage[] }): string {
+  if (suggestions === 0 || models.some((m) => m.costUsd === null)) return "";
+  const each = models.reduce((sum, m) => sum + m.costUsd!, 0) / suggestions;
+  return `, about $${each < 0.01 ? each.toFixed(3) : each.toFixed(2)} each`;
+}
+
 function reportUsage(out: (text: string) => void, usage: readonly ModelUsage[]): void {
   for (const { model, tokens, costUsd } of usage) {
     const cost = costUsd === null ? "cost unknown" : dollars(costUsd);

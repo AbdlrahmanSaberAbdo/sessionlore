@@ -16,6 +16,7 @@ export {
   type RunEstimate,
   type AnalysisResult,
   type AnalyzeOptions,
+  type Progress,
   type ModelUsage,
   type ScanResult,
   type ScanOptions,

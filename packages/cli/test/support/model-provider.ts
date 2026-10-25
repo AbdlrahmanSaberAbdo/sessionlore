@@ -13,17 +13,21 @@ export interface ScriptedModelProvider {
   modelProvider: ModelProvider;
   /** The full text of every request the Model Provider received, in order. */
   requests(): string[];
+  /** The sampling settings of every request, in order. */
+  settings(): { temperature?: number; topP?: number; topK?: number }[];
 }
 
 /** `reply` sees the request's text and returns the structured reply (or raw text to send as-is). */
 export function scriptedModelProvider(reply: (request: string) => Reply): ScriptedModelProvider {
   const received: string[] = [];
+  const settings: { temperature?: number; topP?: number; topK?: number }[] = [];
   const model = (name: string) =>
     new MockLanguageModelV4({
       modelId: name,
       doGenerate: async (options) => {
         const request = JSON.stringify(options.prompt);
         received.push(request);
+        settings.push({ temperature: options.temperature, topP: options.topP, topK: options.topK });
         const answer = reply(request);
         return {
           content: [{ type: "text", text: typeof answer === "string" ? answer : JSON.stringify(answer) }],
@@ -36,5 +40,9 @@ export function scriptedModelProvider(reply: (request: string) => Reply): Script
         };
       },
     });
-  return { modelProvider: { cheap: model("mock-cheap"), strong: model("mock-strong") }, requests: () => [...received] };
+  return {
+    modelProvider: { cheap: model("mock-cheap"), strong: model("mock-strong") },
+    requests: () => [...received],
+    settings: () => [...settings],
+  };
 }
