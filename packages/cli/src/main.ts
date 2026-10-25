@@ -16,6 +16,7 @@ import {
   type Clock,
   type Embedder,
   type Env,
+  type HarnessId,
   type ModelProvider,
   type Renderer,
   type Scope,
@@ -80,6 +81,8 @@ interface CommandContext {
   dataDir: string;
   /** `--last N`: limit a Scan to the N most recent Sessions. */
   last?: number;
+  /** `--harness`: limit a Scan to these Harnesses. */
+  harnesses?: HarnessId[];
   serve: { port: number; open: boolean; openBrowser?: (url: string) => void; uiDir?: string };
   out(text: string): void;
   err(text: string): void;
@@ -174,8 +177,8 @@ const commands: Record<string, Command> = {
   },
   scan: {
     summary: "Read Sessions from every Harness on this machine into the local store",
-    async run({ app, json, last, out, warn }) {
-      const result = await app.scan({ last });
+    async run({ app, json, last, harnesses, out, warn }) {
+      const result = await app.scan({ last, harnesses });
       for (const warning of result.harnesses.flatMap((h) => h.warnings)) warn(`Warning: ${warning}\n`);
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       for (const harness of result.harnesses) {
@@ -537,6 +540,7 @@ function usage(): string {
     `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\n` +
     `Options:\n  --json                     Machine-readable output\n` +
     `  --last N                   scan: read only the N most recent Sessions\n` +
+    `  --harness <id>             scan: read only claude-code or cursor (repeat, or separate with commas)\n` +
     `  --yes, -y                  analyze: skip the cost estimate confirmation\n` +
     `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n` +
     `  --export                   stats: print aggregate numbers only (counts, Corrections per Task, Workflow names)\n` +
@@ -596,6 +600,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
         help: { type: "boolean", short: "h" },
         "show-redacted": { type: "string" },
         last: { type: "string" },
+        harness: { type: "string", multiple: true },
         export: { type: "boolean", default: false },
         anonymize: { type: "boolean", default: false },
         port: { type: "string" },
@@ -630,6 +635,18 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       io.stderr(`--last takes a positive whole number of Sessions, not "${parsed.values.last}"\n\n${usage()}`);
       return 2;
     }
+  }
+
+  let harnesses: HarnessId[] | undefined;
+  if (parsed.values.harness !== undefined) {
+    const known = (io.adapters ?? allAdapters).map((a) => a.harness);
+    const named = parsed.values.harness.flatMap((h) => h.split(",")).map((h) => h.trim()).filter(Boolean);
+    const unknown = named.filter((h) => !known.includes(h as HarnessId));
+    if (named.length === 0 || unknown.length > 0) {
+      io.stderr(`--harness takes ${known.join(" or ")} (repeat it or separate them with commas), not "${unknown.join(", ")}"\n\n${usage()}`);
+      return 2;
+    }
+    harnesses = named as HarnessId[];
   }
 
   let port = DEFAULT_PORT;
@@ -672,6 +689,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider,
       configFile: configPath(io.homeDir),
       last,
+      harnesses,
       editFile: io.editFile ?? ((path) => openInEditor(path, io.env)),
       dataDir: dataDir(io.homeDir),
       serve,

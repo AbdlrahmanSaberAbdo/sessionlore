@@ -230,6 +230,8 @@ export interface HarnessScanResult {
 export interface ScanOptions {
   /** Read only the N Sessions with the most recent activity, across all Harnesses. */
   last?: number;
+  /** Read only these Harnesses; every Harness when omitted. */
+  harnesses?: readonly HarnessId[];
 }
 
 export interface ScanResult {
@@ -413,7 +415,8 @@ export class App {
     const counts = new Map<Adapter, { added: number; updated: number; unchanged: number }>();
     const unrecognized = new Map<Adapter, Map<string, number>>();
     const found: { adapter: Adapter; source: SessionSource }[] = [];
-    for (const adapter of this.deps.adapters) {
+    const adapters = this.deps.adapters.filter((a) => !options.harnesses || options.harnesses.includes(a.harness));
+    for (const adapter of adapters) {
       const storages = await adapter.discover(this.deps.harnessContext);
       if (storages.length === 0) continue; // this Harness has no data on this machine
       counts.set(adapter, { added: 0, updated: 0, unchanged: 0 });

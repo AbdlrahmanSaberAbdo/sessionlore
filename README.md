@@ -30,6 +30,7 @@ Opens the dashboard on a made-up history. It needs no Model Provider, downloads 
 ```bash
 npx sessionlore scan            # every finished session on this machine
 npx sessionlore scan --last 50  # only the 50 most recent
+npx sessionlore scan --harness cursor  # only one tool: claude-code or cursor (repeat, or comma-separate)
 npx sessionlore sessions        # list what was stored
 ```
 

@@ -246,3 +246,40 @@ describe("scan of Cursor Sessions", () => {
     expect(sessions[0].project).toEqual({ name: "my shop", path: repo });
   });
 });
+
+describe("scan --harness", () => {
+  function writeBoth() {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("add a checkout button")] });
+    writeCursorDatabase(home, [{ folder: repo, createdAt: "2026-05-02T09:00:00.000Z", bubbles: [bubble.user("add a cart page")] }]);
+  }
+  const harnesses = async () =>
+    (await runCli(home, ["sessions", "--json"])).json().sessions.map((s: any) => s.harness).sort();
+
+  it("reads only the Harness it names", async () => {
+    writeBoth();
+
+    const scan = await runCli(home, ["scan", "--harness", "cursor", "--json"]);
+
+    expect(scan.exitCode, scan.stderr).toBe(0);
+    expect(scan.json().harnesses.map((h: any) => h.harness)).toEqual(["cursor"]);
+    expect(await harnesses()).toEqual(["cursor"]);
+  });
+
+  it("takes several Harnesses, repeated or comma-separated", async () => {
+    writeBoth();
+
+    expect((await runCli(home, ["scan", "--harness", "claude-code", "--harness", "cursor"])).exitCode).toBe(0);
+    expect(await harnesses()).toEqual(["claude-code", "cursor"]);
+    const again = await runCli(home, ["scan", "--harness", "cursor,claude-code", "--json"]);
+    expect(again.json().harnesses.map((h: any) => h.harness).sort()).toEqual(["claude-code", "cursor"]);
+  });
+
+  it("rejects a Harness sessionlore does not know", async () => {
+    const result = await runCli(home, ["scan", "--harness", "vim"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("claude-code");
+    expect(result.stderr).toContain("cursor");
+  });
+});
