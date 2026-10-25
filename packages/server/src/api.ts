@@ -23,6 +23,7 @@ export function apiRoutes(app: App): Hono {
     const workflow = /^\d+$/.test(id) ? app.browseWorkflow(Number(id), browseFilter(c)) : null;
     return workflow ? c.json(workflow) : c.json({ error: `No Workflow has id ${id}.` }, 404);
   });
+  api.get("/mind-map", (c) => c.json(app.mindMap(browseFilter(c))));
   api.get("/sessions", (c) => c.json(app.browseSessions(browseFilter(c))));
   api.get("/sessions/:id", (c) => {
     const session = app.viewSession(c.req.param("id"));

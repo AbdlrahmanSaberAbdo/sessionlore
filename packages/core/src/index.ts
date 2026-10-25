@@ -45,6 +45,10 @@ export type { ReviewEvidence, ReviewQueue, ReviewQueueItem, SuggestionReview } f
 export type {
   BrowseFilter,
   FilterOptions,
+  MindMap,
+  MindMapEdge,
+  MindMapNode,
+  MindMapNodeKind,
   NearWorkflowSummary,
   SessionList,
   SessionTaskView,

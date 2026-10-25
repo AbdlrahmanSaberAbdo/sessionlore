@@ -26,6 +26,9 @@ import {
   filterOptions,
   matchesFilter,
   type BrowseFilter,
+  type MindMap,
+  type MindMapEdge,
+  type MindMapNode,
   type SessionList,
   type SessionView,
   type SessionViewMessage,
@@ -52,6 +55,7 @@ import {
   type RenderContext,
   type RenderedFile,
   type Renderer,
+  type SkillSuggestion,
   type Suggestion,
   type SuggestionState,
 } from "./suggestion.js";
@@ -863,6 +867,90 @@ export class App {
       })),
       messages: viewed,
     };
+  }
+
+  /**
+   * The mind map of Workflows' Tasks within the filter: Project → Workflow →
+   * Task → Session, with Suggestions under their Workflow. A Workflow with no
+   * Task left is left out; near-Workflows are not shown.
+   */
+  mindMap(filter: BrowseFilter = {}): MindMap {
+    const allSessions = this.listSessions();
+    const sessions = new Map(allSessions.map((s) => [`${s.harness}:${s.id}`, s]));
+    const suggestions = this.store.listSuggestions().filter((s): s is SkillSuggestion => s.kind === "skill");
+    const nodes = new Map<string, MindMapNode>();
+    const edges = new Map<string, MindMapEdge>();
+    const link = (source: string, target: string) => {
+      const id = `${source}->${target}`;
+      if (!edges.has(id)) edges.set(id, { id, source, target });
+    };
+    const addHarness = (id: string, harness: HarnessId) => {
+      const node = nodes.get(id)!;
+      if (!node.harnesses.includes(harness)) node.harnesses.push(harness);
+    };
+    const projectNodes: MindMapNode[] = [];
+    const rest: MindMapNode[] = [];
+    const add = (node: MindMapNode, into: MindMapNode[] = rest) => {
+      if (nodes.has(node.id)) return;
+      nodes.set(node.id, node);
+      into.push(node);
+    };
+
+    for (const workflow of this.listWorkflows().workflows) {
+      const tasks = workflow.tasks.filter((t) => matchesFilter(filter, t));
+      if (tasks.length === 0) continue;
+      const workflowId = `workflow:${workflow.id}`;
+      const harnesses = distinct(tasks.map((t) => t.harness), (h) => h);
+      add({
+        id: workflowId,
+        kind: "workflow",
+        label: workflow.name,
+        harnesses,
+        workflow: workflow.id,
+        tasks: tasks.length,
+        sessions: new Set(tasks.map((t) => `${t.harness}:${t.session}`)).size,
+        correctionsPerTask: correctionsPerTask(tasks).overall,
+      });
+      for (const t of tasks) {
+        if (t.project) {
+          const projectId = `project:${t.project.path}`;
+          add({ id: projectId, kind: "project", label: t.project.name, path: t.project.path, harnesses: [] }, projectNodes);
+          addHarness(projectId, t.harness);
+          link(projectId, workflowId);
+        }
+        const taskId = `task:${t.harness}:${t.session}:${t.position}`;
+        add({
+          id: taskId,
+          kind: "task",
+          label: t.title,
+          harnesses: [t.harness],
+          session: t.session,
+          position: t.position,
+          at: t.at,
+          corrections: t.corrections,
+        });
+        link(workflowId, taskId);
+        const stored = sessions.get(`${t.harness}:${t.session}`);
+        const startedAt = stored?.startedAt ?? t.at;
+        const sessionId = `session:${t.harness}:${t.session}`;
+        add({
+          id: sessionId,
+          kind: "session",
+          label: `${t.project?.name ?? "No Project"} · ${startedAt.slice(0, 10)}`,
+          harnesses: [t.harness],
+          session: t.session,
+          project: t.project,
+          startedAt,
+        });
+        link(taskId, sessionId);
+      }
+      for (const s of suggestions.filter((s) => s.workflow?.id === workflow.id)) {
+        const suggestionId = `suggestion:${s.id}`;
+        add({ id: suggestionId, kind: "suggestion", label: s.title, harnesses, suggestion: s.id, state: s.state });
+        link(workflowId, suggestionId);
+      }
+    }
+    return { nodes: [...projectNodes, ...rest], edges: [...edges.values()], filters: filterOptions(allSessions) };
   }
 
   /** Each Workflow's latest Suggestion. */
