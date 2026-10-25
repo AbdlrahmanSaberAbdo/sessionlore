@@ -12,7 +12,14 @@
     "typecheck": "tsc -p tsconfig.json",
     "build": "pnpm --filter sessionlore build"
   },
+  "//": "The internal packages are linked here rather than in packages/cli, whose manifest is published: the CLI build bundles them.",
   "devDependencies": {
+    "@sessionlore/adapters": "workspace:*",
+    "@sessionlore/analysis": "workspace:*",
+    "@sessionlore/core": "workspace:*",
+    "@sessionlore/fixtures": "workspace:*",
+    "@sessionlore/renderers": "workspace:*",
+    "@sessionlore/server": "workspace:*",
     "@types/node": "^22.20.5",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",

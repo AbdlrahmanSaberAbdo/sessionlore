@@ -4,31 +4,143 @@
 
 sessionlore reads your past AI coding sessions (Claude Code and Cursor to start), finds the workflows you keep repeating, and drafts skills and rules from them. You review every draft before anything is written to your agent's config.
 
-**Status:** pre-alpha, built in public. Nothing works yet.
+**Status:** v0.1, early. Expect rough edges and breaking changes.
 
-## How it will work
+## How it works
 
 1. **Scan**: read finished sessions from Claude Code and Cursor into a local SQLite database.
 2. **Analyze**: split sessions into tasks, label your corrections, and group similar tasks together.
 3. **Suggest**: draft a skill or rule for each repeated workflow, citing the sessions it came from.
-4. **Review**: accept, edit or reject drafts in a local dashboard. Accepted ones are written to `.claude/skills` or `CLAUDE.md`.
+4. **Review**: accept, edit or reject drafts in the terminal or a local dashboard. Accepted ones are written to `.claude/skills` or `CLAUDE.md`.
+
+## Quickstart
+
+Needs Node.js 22.13 or newer. Every command below also takes `--json` for machine-readable output; `npx sessionlore --help` lists them all.
+
+### 1. Try the demo
 
 ```bash
-npx sessionlore scan
+npx sessionlore demo
+```
+
+Opens the dashboard on a made-up history. It needs no Model Provider, downloads nothing, and never reads or writes your own sessions or store. Add `--no-open` to only print the address, or `--port N` to pick the port (default 4848). Press Ctrl-C to stop it.
+
+### 2. Scan your sessions
+
+```bash
+npx sessionlore scan            # every finished session on this machine
+npx sessionlore scan --last 50  # only the 50 most recent
+npx sessionlore sessions        # list what was stored
+```
+
+Scan reads Claude Code's session files and Cursor's local database read-only and copies them into `~/.sessionlore/sessionlore.db`. It works without a Model Provider and sends nothing anywhere.
+
+### 3. Set up a Model Provider
+
+Analysis and suggestions use a model you choose, with your own key. Create `~/.sessionlore/config.json`:
+
+```json
+{
+  "modelProvider": {
+    "provider": "anthropic",
+    "cheapModel": "claude-haiku-4-5",
+    "strongModel": "claude-sonnet-4-5",
+    "apiKeyEnv": "ANTHROPIC_API_KEY"
+  }
+}
+```
+
+- `provider` is one of `anthropic`, `openai`, `google`, `ollama` or `openai-compatible`.
+- `cheapModel` does the per-session work in `analyze`; `strongModel` writes suggestions.
+- The API key comes from `apiKey`, the variable named in `apiKeyEnv`, `SESSIONLORE_API_KEY`, or the provider's own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`). Ollama needs none.
+- `baseURL` points at another endpoint; `openai-compatible` requires it (LM Studio, vLLM, OpenRouter and similar). Ollama defaults to `http://localhost:11434/api`.
+
+Environment variables override the file, so you can also skip it entirely:
+
+```bash
+export SESSIONLORE_PROVIDER=openai
+export SESSIONLORE_CHEAP_MODEL=gpt-5-mini
+export SESSIONLORE_STRONG_MODEL=gpt-5
+export SESSIONLORE_API_KEY=sk-...       # or OPENAI_API_KEY
+# SESSIONLORE_BASE_URL=...              # optional
+```
+
+The same file also takes `projects` (`include` / `exclude` lists of project folders), `repeatRule` and `prices` sections.
+
+### 4. Analyze
+
+```bash
+npx sessionlore analyze
+```
+
+Splits new or changed sessions into tasks, labels each message you typed (New Task, Correction, Clarification, Approval or Follow-up), and groups similar tasks into workflows. It shows a cost estimate and asks before calling the model; `--yes` skips the question. Ctrl-C stops after the current step and keeps finished work.
+
+The first run downloads a small local embedding model (about 25 MB) into `~/.sessionlore/models`; later runs reuse it.
+
+```bash
+npx sessionlore workflows     # repeated workflows, and near ones
+npx sessionlore workflow <id> # one workflow with its tasks
+npx sessionlore corrections   # corrections you keep typing
+npx sessionlore tasks         # every task with its labels
+```
+
+### 5. Suggest
+
+```bash
+npx sessionlore suggest
+```
+
+Uses the strong model to draft a skill for each workflow and a rule for each repeated correction that has none yet. If you already have a matching skill or rule, the draft updates it instead.
+
+### 6. Review
+
+```bash
+npx sessionlore review         # pending drafts, their evidence, and a diff for updates
+npx sessionlore edit <id>      # change a draft in $VISUAL or $EDITOR first
+npx sessionlore scope <id> user           # install for every project (~/.claude)
+npx sessionlore scope <id> project [dir]  # install for one project
+npx sessionlore accept <id>    # write it
+npx sessionlore reject <id>    # drop it; it won't be proposed again
+npx sessionlore restore <id>   # undo an accept, putting back any file it overwrote
+```
+
+Skills are written to `.claude/skills/<name>/SKILL.md` and rules to `CLAUDE.md`, in the project or in `~/.claude`, depending on the draft's scope. Nothing is written until you accept.
+
+`npx sessionlore stats` shows how often accepted skills get used afterwards.
+
+### 7. Use the dashboard
+
+```bash
 npx sessionlore serve
 ```
 
-To see the dashboard on a made-up history first (no Model Provider needed, your own sessions untouched): `npx sessionlore demo`.
+Opens the same data in your browser: an overview, a map of projects, workflows, tasks and sessions, and the review queue with accept, edit and reject. It listens on `127.0.0.1` only. `--port N` and `--no-open` work as in the demo.
+
+## What leaves your machine
+
+sessionlore has no server and no telemetry. It only talks to the network in two cases:
+
+**Sent to your Model Provider** (only by `analyze` and `suggest`, and only after you configure one):
+
+- the messages you typed in each session, never the agent's replies, tool calls, file contents or command output;
+- task titles and correction messages, to name groups of similar tasks and corrections;
+- for `suggest`, the messages of the tasks in a workflow or the corrections in a group, plus the text of an existing skill or rule it would update.
+
+Every text is passed through secret redaction first: private keys, passwords in URLs, cloud and API keys, tokens, JWTs and other high-entropy strings become placeholders such as `[REDACTED:api-key]`. Run `npx sessionlore analyze --show-redacted <session>` to see exactly what would be sent for one session. Long messages are cut short.
+
+**Downloaded once:** the embedding model, from Hugging Face, on the first `analyze`. Nothing is uploaded.
+
+**Stays local:** your sessions, the store at `~/.sessionlore/sessionlore.db`, the embeddings (computed on your machine), the dashboard, and the skills and rules you accept. `npx sessionlore stats --export` prints aggregate numbers you can share by hand (`--anonymize` hides workflow names); sessionlore never sends them itself.
 
 ## Principles
 
-- **Local first.** Your sessions stay on your machine. Only redacted text goes to the model provider you choose.
+- **Local first.** Your sessions stay on your machine. Only redacted text goes to the Model Provider you choose.
 - **Bring your own model.** Any provider supported by the Vercel AI SDK, with your own key.
 - **Nothing changes without your OK.** Every suggestion goes through the review queue.
 
 ## Roadmap
 
-See [docs/v2-plan.md](docs/v2-plan.md) for what comes after v1.
+See [docs/v2-plan.md](https://github.com/AbdlrahmanSaberAbdo/sessionlore/blob/main/docs/v2-plan.md) for what comes after v1.
 
 ## License
 

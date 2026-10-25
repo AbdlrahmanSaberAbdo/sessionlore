@@ -23,5 +23,9 @@ export default defineConfig({
     const ui = fileURLToPath(new URL("../ui/dist/", import.meta.url));
     if (!existsSync(join(ui, "index.html"))) throw new Error("The dashboard UI is not built; run `pnpm --filter @sessionlore/ui build` first.");
     cpSync(ui, fileURLToPath(new URL("./dist/ui/", import.meta.url)), { recursive: true });
+    // npm takes the package page's README and the LICENSE from the package folder; the repository's are the source.
+    for (const file of ["README.md", "LICENSE"]) {
+      cpSync(fileURLToPath(new URL(`../../${file}`, import.meta.url)), fileURLToPath(new URL(`./${file}`, import.meta.url)));
+    }
   },
 });
