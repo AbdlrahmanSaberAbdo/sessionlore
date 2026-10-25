@@ -608,9 +608,13 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
   }
 
   const [name] = parsed.positionals;
-  if (!name || parsed.values.help) {
-    (name ? io.stdout : io.stderr)(usage());
-    return name ? 0 : 2;
+  if (parsed.values.help) {
+    io.stdout(usage());
+    return 0;
+  }
+  if (!name) {
+    io.stderr(usage());
+    return 2;
   }
   const command = commands[name];
   const standalone = standaloneCommands[name];
