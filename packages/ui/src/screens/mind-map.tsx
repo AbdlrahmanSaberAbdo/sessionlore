@@ -13,7 +13,7 @@ import {
 import { useMemo, useState } from "react";
 import { FilterBar, harnessName, plural } from "../components/filters.js";
 import { initiallyCollapsed, layoutMindMap, NODE_HEIGHT, NODE_WIDTH, type PlacedNode } from "../mind-map-layout.js";
-import { filterQuery, Link } from "../router.js";
+import { filterQuery, Link, suggestionPath } from "../router.js";
 
 /**
  * Projects → Workflows → Tasks → Sessions as a graph, with Suggestions beside
@@ -204,9 +204,12 @@ function NodeFacts({ node, filter }: { node: MindMapNode; filter: BrowseFilter }
       );
     case "suggestion":
       return (
-        <p>
-          Skill Suggestion <span className={`state ${node.state.toLowerCase()}`}>{node.state}</span>
-        </p>
+        <>
+          <p>
+            Skill Suggestion <span className={`state ${node.state.toLowerCase()}`}>{node.state}</span>
+          </p>
+          <Link href={suggestionPath(node.suggestion)}>{node.state === "Pending" ? "Review it" : "Open Suggestion"}</Link>
+        </>
       );
   }
 }

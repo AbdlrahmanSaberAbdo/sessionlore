@@ -1,8 +1,19 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { FilterOptions, MindMap, Overview, SessionList, SessionView, WorkflowDetail, WorkflowList } from "@sessionlore/core";
+import type {
+  FilterOptions,
+  MindMap,
+  Overview,
+  ReviewQueue,
+  SessionList,
+  SessionView,
+  SuggestionReview,
+  WorkflowDetail,
+  WorkflowList,
+} from "@sessionlore/core";
 import { MindMapScreen } from "../src/screens/mind-map.js";
 import { OverviewScreen } from "../src/screens/overview.js";
+import { ReviewQueueScreen, ReviewScreen, type ReviewActions } from "../src/screens/review.js";
 import { SessionScreen, SessionsScreen } from "../src/screens/sessions.js";
 import { WorkflowScreen, WorkflowsScreen } from "../src/screens/workflows.js";
 
@@ -112,6 +123,86 @@ const sessionView: SessionView = {
 };
 
 const sessions: SessionList = { sessions: [sessionView], filters };
+
+const queue: ReviewQueue = {
+  suggestions: [
+    {
+      id: 2,
+      kind: "skill",
+      title: "Write a database migration",
+      scope: { kind: "project", project: { name: "shop", path: "/code/shop" } },
+      evidence: 3,
+      target: null,
+      createdAt: "2026-06-01T12:00:00.000Z",
+    },
+    {
+      id: 3,
+      kind: "rule",
+      title: "Use pnpm",
+      scope: { kind: "user" },
+      evidence: 4,
+      target: { kind: "rule", path: "/code/shop/CLAUDE.md", line: "- Always run things with pnpm." },
+      createdAt: "2026-06-01T12:00:00.000Z",
+    },
+  ],
+};
+
+const evidence = {
+  task: { title: "write a migration for orders", at: "2026-05-04T09:00:00.000Z" },
+  session: { id: "sess-1", harness: "claude-code" as const },
+  project: { name: "shop", path: "/code/shop" },
+};
+
+const skillReview: SuggestionReview = {
+  suggestion: {
+    id: 2,
+    kind: "skill",
+    state: "Pending",
+    title: "Write a database migration",
+    trigger: "Use when changing a table.",
+    steps: ["Write it.", "Run it."],
+    workflow: { id: 4, name: "Write database migrations" },
+    companionOf: null,
+    evidence: [evidence],
+    scope: { kind: "project", project: { name: "shop", path: "/code/shop" } },
+    createdAt: "2026-06-01T12:00:00.000Z",
+    acceptedAt: null,
+    rejectedAt: null,
+    installedFiles: [],
+    target: null,
+  },
+  form: { title: "Write a database migration", trigger: "Use when changing a table.", steps: ["Write it.", "Run it."] },
+  changes: [{ path: "/code/shop/.claude/skills/write-a-database-migration/SKILL.md", before: null, after: "# Write a database migration\n", diff: "" }],
+  changesError: null,
+  evidence: [{ ...evidence, link: "/sessions/sess-1#task-0" }],
+  projects: filters.projects,
+};
+
+const ruleReview: SuggestionReview = {
+  ...skillReview,
+  suggestion: {
+    ...skillReview.suggestion,
+    kind: "rule",
+    id: 3,
+    title: "Use pnpm",
+    rule: "Use pnpm.",
+    correctionCluster: null,
+    target: { kind: "rule", path: "/code/shop/CLAUDE.md", line: "- Always run things with pnpm." },
+  } as SuggestionReview["suggestion"],
+  form: { title: "Use pnpm", rule: "Use pnpm." },
+  changes: [
+    {
+      path: "/code/shop/CLAUDE.md",
+      before: "- Always run things with pnpm.\n",
+      after: "- Use pnpm.\n",
+      diff: "--- /code/shop/CLAUDE.md\n+++ /code/shop/CLAUDE.md\n@@ -1 +1 @@\n-- Always run things with pnpm.\n+- Use pnpm.\n",
+    },
+  ],
+  evidence: [{ ...evidence, correction: { text: "no, use pnpm", at: "2026-05-04T09:05:00.000Z" }, link: "/sessions/sess-1#task-0" }],
+};
+
+const noActions: ReviewActions = { save: async () => {}, setScope: async () => {}, accept: async () => {}, reject: async () => {} };
+
 
 const mindMap: MindMap = {
   nodes: [
@@ -228,6 +319,53 @@ describe("UI screens", () => {
     expect(html).toContain("2026-05-04: 6 Corrections");
   });
 
+  it("Review lists Pending Suggestions with kind, Scope and Evidence count, linking to each", () => {
+    const html = renderToStaticMarkup(<ReviewQueueScreen queue={queue} />);
+
+    for (const text of ["Write a database migration", "Skill", "Project scope (shop)", "3 Tasks", "Rule", "User scope", "4 Corrections", "Updates /code/shop/CLAUDE.md"]) {
+      expect(html).toContain(text);
+    }
+    expect(html).toContain('href="/suggestions/2"');
+  });
+
+  it("A Suggestion in review shows what accepting writes, an edit form, the Scope, actions and Evidence links", () => {
+    const html = renderToStaticMarkup(<ReviewScreen review={skillReview} actions={noActions} notice="Saved your changes." />);
+
+    expect(html).toContain("/code/shop/.claude/skills/write-a-database-migration/SKILL.md");
+    expect(html).toContain("# Write a database migration");
+    expect(html).toMatch(/<textarea[^>]*>Write it.\nRun it.<\/textarea>/);
+    expect(html).toMatch(/<option value="\/code\/shop" selected="">Project scope: shop<\/option>/);
+    expect(html).toContain(">Accept</button>");
+    expect(html).toContain(">Reject</button>");
+    expect(html).toContain('href="/sessions/sess-1#task-0"');
+    expect(html).toContain("Saved your changes.");
+  });
+
+  it("A Suggestion with a Target shows the diff, and a Rule's Evidence shows its Corrections", () => {
+    const html = renderToStaticMarkup(<ReviewScreen review={ruleReview} actions={noActions} />);
+
+    expect(html).toContain('<span class="del">-- Always run things with pnpm.');
+    expect(html).toContain('<span class="add">+- Use pnpm.');
+    expect(html).toContain("updates /code/shop/CLAUDE.md");
+    expect(html).toContain("“no, use pnpm”");
+  });
+
+  it("A Suggestion no longer Pending has no actions or edit form", () => {
+    const accepted: SuggestionReview = {
+      ...skillReview,
+      suggestion: { ...skillReview.suggestion, state: "Accepted", installedFiles: ["/code/shop/x/SKILL.md"] },
+      form: null,
+      changes: null,
+    };
+
+    const html = renderToStaticMarkup(<ReviewScreen review={accepted} actions={noActions} />);
+
+    expect(html).toContain("Accepted");
+    expect(html).toContain("/code/shop/x/SKILL.md");
+    expect(html).not.toContain(">Accept</button>");
+    expect(html).not.toContain("<textarea");
+  });
+
   it("Mind map draws the graph coloured by Harness, with filters and a legend", () => {
     const html = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{}} />);
 
@@ -247,6 +385,12 @@ describe("UI screens", () => {
     expect(workflowHtml).toMatch(/class="mind-details[^"]*"[^]*2 Tasks[^]*0.50 Corrections per Task/);
     expect(workflowHtml).toContain('href="/workflows/4?harness=cursor"');
     expect(sessionHtml).toContain('href="/sessions/sess-2"');
+  });
+
+  it("Mind map links a Suggestion node to its review screen", () => {
+    const html = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{}} initialSelected="suggestion:2" />);
+
+    expect(html).toContain('href="/suggestions/2"');
   });
 
   it("Mind map hides a collapsed node's Tasks and Sessions", () => {

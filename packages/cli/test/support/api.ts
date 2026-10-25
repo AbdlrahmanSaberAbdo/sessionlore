@@ -19,6 +19,8 @@ export interface ApiResponse {
 
 export interface Api {
   get(path: string): Promise<ApiResponse>;
+  /** Sends `body` as JSON, the way the UI does; `headers` add to or override the defaults. */
+  send(method: "POST" | "PUT", path: string, body?: unknown, headers?: Record<string, string>): Promise<ApiResponse>;
   close(): void;
 }
 
@@ -36,17 +38,26 @@ export function openApi(home: FixtureHome, options: ApiOptions = {}): Api {
     embedder: options.embedder,
   });
   const server = createServer({ app, uiDir: options.uiDir });
+  const call = async (request: Request): Promise<ApiResponse> => {
+    const response = await server.fetch(request);
+    const text = await response.text();
+    return {
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+      text,
+      json: () => JSON.parse(text),
+    };
+  };
   return {
-    async get(path) {
-      const response = await server.fetch(new Request(new URL(path, "http://localhost")));
-      const text = await response.text();
-      return {
-        status: response.status,
-        contentType: response.headers.get("content-type"),
-        text,
-        json: () => JSON.parse(text),
-      };
-    },
+    get: (path) => call(new Request(new URL(path, "http://localhost"))),
+    send: (method, path, body, headers) =>
+      call(
+        new Request(new URL(path, "http://localhost"), {
+          method,
+          headers: { "content-type": "application/json", origin: "http://localhost", ...headers },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        }),
+      ),
     close: () => app.close(),
   };
 }
