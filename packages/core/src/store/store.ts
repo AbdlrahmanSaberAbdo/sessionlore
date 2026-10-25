@@ -436,6 +436,17 @@ export class Store {
   }
 
   /** Sessions never analyzed, or whose User Messages changed since their last Analysis. */
+  /** The Project (null for none) of every Session whose current content is analyzed. */
+  analyzedSessionProjects(): (ResolvedProject | null)[] {
+    return this.db
+      .all<{ project_name: string | null; project_root: string | null }>(
+        `SELECT p.name AS project_name, p.root AS project_root
+           FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
+          WHERE s.analyzed_fingerprint IS NOT NULL AND s.analyzed_fingerprint IS s.content_fingerprint`,
+      )
+      .map((s) => (s.project_root && s.project_name ? { root: s.project_root, name: s.project_name } : null));
+  }
+
   sessionsToAnalyze(): SessionToAnalyze[] {
     return this.sessionsWithMessages("WHERE s.analyzed_fingerprint IS NOT s.content_fingerprint");
   }

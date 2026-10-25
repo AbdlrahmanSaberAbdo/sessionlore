@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
 import { topicEmbedder } from "./support/embedder.js";
-import { fixedClock, runCli, type CliResult, type RunOptions } from "./support/harness.js";
+import { fixedClock, runCli, writeConfig, type CliResult, type RunOptions } from "./support/harness.js";
 import { scriptedModelProvider } from "./support/model-provider.js";
 
 /** These tests run real servers, so they get more than the default 5s. */
@@ -95,7 +95,7 @@ describe("run", { timeout: SLOW }, () => {
     expect("exited" in started).toBe(true);
     const result = (started as { exited: CliResult }).exited;
     expect(result.exitCode).toBe(1);
-    expect(result.stdout).toContain("Claude Code: 3 Sessions added");
+    expect(result.stdout).toMatch(/^ {2}Claude Code +~\/\.claude\/projects +3 Sessions, 3 new$/m);
     expect(result.stderr).toContain('"modelProvider"');
     expect(result.stderr).toContain('"apiKeyEnv": "ANTHROPIC_API_KEY"');
     expect(result.stderr).toContain("export SESSIONLORE_PROVIDER=");
@@ -116,20 +116,18 @@ describe("run", { timeout: SLOW }, () => {
     expect(url.pathname).toBe("/suggestions");
     expect(queue.suggestions.map((s: { title: string }) => s.title)).toEqual(["Write a database migration"]);
     expect(result.exitCode, result.stderr).toBe(0);
-    expect(result.stdout).toContain("3 Sessions to analyze. Estimated use:");
-    expect(result.stdout).toContain("  mock-cheap: about");
+    expect(result.stdout).toContain("Analysis: 3 new or changed Sessions\n");
+    expect(result.stdout).toMatch(/^ {2}mock-cheap +about [\d,]+ input \+ [\d,]+ output tokens +cost unknown$/m);
     // Before Analysis no Workflow exists yet: the 3 new Tasks can form at most one Workflow and one Correction Cluster.
-    expect(result.stdout).toContain(
-      "Then one Suggestion for each Workflow and repeated Correction the Analysis finds, at most 2 (how many is only known after Analysis). Estimated use, at most:",
-    );
-    expect(result.stdout).toContain("  mock-strong: about");
-    expect(result.stdout).toContain("Sessions: 3 added, 0 updated\n");
-    expect(result.stdout).toContain("Tasks: 3\n");
-    expect(result.stdout).toContain("Workflows: 1, near-Workflows: 0\n");
-    expect(result.stdout).toContain("Correction Clusters: 0\n");
-    expect(result.stdout).toContain("Suggestions written: 1\n");
-    expect(result.stdout).toMatch(/Used: mock-cheap: \d+ input and \d+ output tokens/);
-    expect(result.stdout).toMatch(/Used: mock-strong: \d+ input and \d+ output tokens/);
+    expect(result.stdout).toContain("Suggestions: one per Workflow or repeated Correction found, at most 2\n");
+    expect(result.stdout).toMatch(/^ {2}mock-strong +at most [\d,]+ input \+ [\d,]+ output tokens +cost unknown$/m);
+    expect(result.stdout).toContain("  3 Tasks across 3 Sessions\n");
+    expect(result.stdout).toContain("  1 Workflow (similar Tasks done at least 3 times in at least 2 Sessions within 60 days), 0 close to repeating\n");
+    expect(result.stdout).toContain("  0 repeated Corrections\n");
+    expect(result.stdout).toContain("  1 new Suggestion to review\n");
+    expect(result.stdout).toContain("Cost: unknown\n");
+    expect(result.stdout).toMatch(/^ {2}mock-cheap +\d+ input \+ \d+ output tokens +cost unknown$/m);
+    expect(result.stdout).toMatch(/^ {2}mock-strong +\d+ input \+ \d+ output tokens +cost unknown$/m);
     expect(result.stdout).toContain(run.url);
     expect(await storedSessions()).toEqual(["2026-05-28", "2026-05-24", "2026-05-20"]);
   });
@@ -143,7 +141,7 @@ describe("run", { timeout: SLOW }, () => {
 
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout.match(/Continue\? \[y\/N\]/g)).toHaveLength(1);
-    expect(result.stdout).toContain("Suggestions written: 1\n");
+    expect(result.stdout).toContain("  1 new Suggestion to review\n");
   });
 
   it("sends no sampling settings, so models that reject them (newer Claude, OpenAI reasoning models) work", async () => {
@@ -261,6 +259,73 @@ describe("run", { timeout: SLOW }, () => {
 
     expect((started as { exited: CliResult }).exited.exitCode).toBe(1);
     expect(await storedSessions()).toEqual(["2026-05-28", "2026-05-24"]);
+  });
+});
+
+describe("run explains what it did", { timeout: SLOW }, () => {
+  it("says where it read each Harness's Sessions from, over which window, and that it only reads", async () => {
+    repeatedWorkflow();
+
+    const started = await startRun(["run"], { clock: now });
+    const result = (started as { exited: CliResult }).exited;
+
+    expect(result.stdout).toContain("Reading your Sessions from the last 30 days (read-only)\n");
+    expect(result.stdout).toMatch(/^ {2}Claude Code {2}~\/\.claude\/projects {2}3 Sessions, 3 new$/m);
+  });
+
+  it("prints a cost under a cent as less than $0.01, never $0.00", async () => {
+    repeatedWorkflow();
+    writeConfig(home, {
+      prices: { "mock-cheap": { inputPerMillion: 1, outputPerMillion: 1 }, "mock-strong": { inputPerMillion: 1, outputPerMillion: 1 } },
+    });
+
+    const result = await (await served(["run", "--yes"], options())).stop();
+
+    expect(result.stdout).toMatch(/^ {2}mock-cheap +about [\d,]+ input \+ [\d,]+ output tokens +less than \$0\.01$/m);
+    expect(result.stdout).toMatch(/^Cost: less than \$0\.01$/m);
+    expect(result.stdout).not.toMatch(/\$0\.00(?!\d)/);
+  });
+
+  it("says how many Sessions are already analyzed and won't be charged again", async () => {
+    repeatedWorkflow();
+    const opts = options();
+    await (await served(["run", "--yes"], opts)).stop();
+    session("2026-05-30T09:00:00.000Z", "write the changelog");
+
+    const result = await (await served(["run", "--yes"], opts)).stop();
+
+    expect(result.stdout).toMatch(/^ {2}Claude Code +~\/\.claude\/projects +4 Sessions, 1 new$/m);
+    expect(result.stdout).toContain("Analysis: 1 new or changed Session (3 already analyzed, not charged again)\n");
+  });
+
+  it("groups what it found under one heading, explaining a Workflow with the configured Repeat Rule", async () => {
+    repeatedWorkflow();
+    writeConfig(home, { repeatRule: { minSessions: 3, windowDays: 45 } });
+
+    const result = await (await served(["run", "--yes"], options())).stop();
+
+    expect(result.stdout).toContain(
+      "\nFound in your analyzed Sessions\n" +
+        "  3 Tasks across 3 Sessions\n" +
+        "  1 Workflow (similar Tasks done at least 3 times in at least 3 Sessions within 45 days), 0 close to repeating\n" +
+        "  0 repeated Corrections\n" +
+        "  1 new Suggestion to review\n" +
+        "Cost: ",
+    );
+    expect(result.stdout).toMatch(/\nReview it in your browser: http:\/\/127\.0\.0\.1:\d+\/suggestions\n/);
+  });
+
+  it("says why it wrote no Suggestion when no Workflow repeats often enough yet", async () => {
+    session("2026-05-20T09:00:00.000Z", "add a database migration for users");
+    session("2026-05-24T09:00:00.000Z", "add a database migration for orders");
+
+    const result = await (await served(["run", "--yes"], options())).stop();
+
+    expect(result.stdout).toContain("  0 Workflows (similar Tasks done at least 3 times in at least 2 Sessions within 60 days), 1 close to repeating\n");
+    expect(result.stdout).toContain(
+      "  No new Suggestions: no Workflow or Correction repeats often enough yet (1 is close); scan more history with --since 90d\n",
+    );
+    expect(result.stdout).not.toContain("Suggestions written: 0");
   });
 });
 

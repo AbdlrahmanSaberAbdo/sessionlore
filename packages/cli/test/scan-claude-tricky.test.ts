@@ -256,7 +256,7 @@ describe("incremental scan", () => {
       turns: [...first.turns, turn.assistant("Done."), turn.user("and three")],
     });
     const changed = await runCli(home, ["scan"]);
-    expect(changed.stdout).toContain("Claude Code: 0 Sessions added, 1 updated, 1 unchanged");
+    expect(changed.stdout).toMatch(/^ {2}Claude Code +~\/\.claude\/projects +2 Sessions, 1 changed since the last run$/m);
 
     const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
     expect(sessions.find((s: any) => s.id === written.id).userMessageCount).toBe(2);

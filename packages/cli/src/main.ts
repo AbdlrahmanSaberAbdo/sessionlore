@@ -1,11 +1,12 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import { allAdapters } from "@sessionlore/adapters";
 import { allRenderers } from "@sessionlore/renderers";
 import {
   App,
+  type AnalysisEstimate,
   type AnalysisResult,
   type ScanResult,
   type SuggestResult,
@@ -91,9 +92,20 @@ interface CommandContext {
   harnesses?: HarnessId[];
   /** `--since`: limit a Scan to Sessions active from this moment on. */
   since?: Date;
+  /** The limits on a Scan as the person gave them, for telling them what was read. */
+  scanWindow: ScanWindow;
+  /** The person's home folder, shortened to `~` in paths shown to them. */
+  homeDir: string;
   serve: { port: number; open: boolean; openBrowser?: (url: string) => void; uiDir?: string };
   out(text: string): void;
   err(text: string): void;
+}
+
+/** The limits on a Scan as given on the command line: `--since` as typed, `--last`, and the `--harness` names. */
+interface ScanWindow {
+  since?: string;
+  last?: number;
+  harnesses?: string[];
 }
 
 /** How far back `run` (and bare `sessionlore`) scans unless `--since` says otherwise. */
@@ -129,7 +141,7 @@ const commands: Record<string, Command> = {
         return;
       }
       const go = await confirmSpend(ctx, {
-        parts: [{ headline: `${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze`, models: estimate.models }],
+        parts: [{ headline: analysisHeadline(estimate), models: estimate.models }],
         what: "Analysis",
         command: "analyze",
         declined: "Nothing analyzed.",
@@ -173,27 +185,28 @@ const commands: Record<string, Command> = {
   },
   scan: {
     summary: "Read Sessions from every Harness on this machine into the local store",
-    async run({ app, json, last, harnesses, since, out, warn }) {
+    async run({ app, json, last, harnesses, since, scanWindow, homeDir, out, warn }) {
       const result = await app.scan({ last, harnesses, since });
       if (json) {
-        reportScan(result, () => {}, warn);
+        reportScan(result, scanWindow, homeDir, () => {}, warn);
         return out(JSON.stringify(result, null, 2) + "\n");
       }
-      reportScan(result, out, warn);
+      reportScan(result, scanWindow, homeDir, out, warn);
     },
   },
   run: {
     summary: `Scan (the last ${DEFAULT_RUN_WINDOW} by default), analyze and suggest in one go, then open the dashboard's Review screen; the default command`,
     async run(ctx) {
-      const { app, json, signal, modelProvider, last, harnesses, since, serve, out, err, warn } = ctx;
+      const { app, json, signal, modelProvider, last, harnesses, since, scanWindow, homeDir, serve, out, err, warn } = ctx;
       const say = json ? err : out;
       const scanned = await app.scan({ last, harnesses, since });
-      reportScan(scanned, say, warn);
+      reportScan(scanned, scanWindow, homeDir, say, warn);
       if (!modelProvider.ok) {
         err(modelProvider.problem);
         return 1;
       }
 
+      say("\n");
       const estimate = await app.estimateRun();
       const toAnalyze = estimate.analysis.sessions;
       const toSuggest = estimate.suggestions.suggestions;
@@ -203,18 +216,16 @@ const commands: Record<string, Command> = {
         say("Nothing new to analyze and nothing to suggest.\n");
       } else {
         const parts = [];
-        if (toAnalyze > 0) parts.push({ headline: `${toAnalyze} ${plural(toAnalyze, "Session")} to analyze`, models: estimate.analysis.models });
+        if (toAnalyze > 0) parts.push({ headline: analysisHeadline(estimate.analysis), models: estimate.analysis.models });
         if (toSuggest > 0) {
           parts.push(
             toAnalyze > 0
               ? {
-                  headline:
-                    "Then one Suggestion for each Workflow and repeated Correction the Analysis finds, " +
-                    `at most ${toSuggest} (how many is only known after Analysis)${perSuggestion(estimate.suggestions)}`,
+                  headline: `Suggestions: one per Workflow or repeated Correction found, at most ${toSuggest}${perSuggestion(estimate.suggestions)}`,
                   models: estimate.suggestions.models,
                   atMost: true,
                 }
-              : { headline: `${toSuggest} ${plural(toSuggest, "Suggestion")} to write`, models: estimate.suggestions.models },
+              : { headline: `Suggestions: ${toSuggest} to write`, models: estimate.suggestions.models },
           );
         }
         const go = await confirmSpend(ctx, { parts, what: "Analysis", command: "run", declined: "Nothing analyzed." });
@@ -239,6 +250,7 @@ const commands: Record<string, Command> = {
       }
 
       const workflows = app.listWorkflows();
+      const corrections = app.listCorrections();
       const found = {
         sessions: {
           added: scanned.harnesses.reduce((n, h) => n + h.added, 0),
@@ -247,19 +259,28 @@ const commands: Record<string, Command> = {
         tasks: app.overview().counts.tasks,
         workflows: workflows.workflows.length,
         nearWorkflows: workflows.nearWorkflows.length,
-        correctionClusters: app.listCorrections().correctionClusters.length,
+        correctionClusters: corrections.correctionClusters.length,
         suggestionsWritten: suggested?.created.length ?? 0,
       };
       const usage = totalUsage(analysis?.usage ?? [], suggested?.usage ?? []);
+      const pending = app.listSuggestions("Pending").length;
       if (!json) {
-        out(`Sessions: ${found.sessions.added} added, ${found.sessions.updated} updated\n`);
-        out(`Tasks: ${found.tasks}\n`);
-        out(`Workflows: ${found.workflows}, near-Workflows: ${found.nearWorkflows}\n`);
-        out(`Correction Clusters: ${found.correctionClusters}\n`);
-        out(`Suggestions written: ${found.suggestionsWritten}\n`);
+        const { minMembers, minSessions, windowDays } = workflows.repeatRule;
+        const analyzedSessions = app.listTasks().length;
+        out("\nFound in your analyzed Sessions\n");
+        out(`  ${count(found.tasks)} ${plural(found.tasks, "Task")} across ${count(analyzedSessions)} ${plural(analyzedSessions, "Session")}\n`);
+        out(
+          `  ${count(found.workflows)} ${plural(found.workflows, "Workflow")} ` +
+            `(similar Tasks done at least ${minMembers} ${plural(minMembers, "time")} in at least ${minSessions} ${plural(minSessions, "Session")} ` +
+            `within ${windowDays} ${plural(windowDays, "day")}), ${count(found.nearWorkflows)} close to repeating\n`,
+        );
+        out(`  ${count(found.correctionClusters)} repeated ${plural(found.correctionClusters, "Correction")}\n`);
+        const near = found.nearWorkflows + corrections.nearCorrectionClusters.length;
+        out(`  ${suggestionsFound(found.suggestionsWritten, pending, found.workflows + found.correctionClusters, near, suggested, scanWindow)}\n`);
         for (const f of analysis?.failed ?? []) out(`  Session ${f.session} failed: ${f.error}\n`);
         for (const f of suggested?.failed ?? []) out(`  ${failedSource(f)} failed: ${f.error}\n`);
         reportUsage(out, usage);
+        out("\n");
       }
       await serveDashboard(
         app,
@@ -268,7 +289,7 @@ const commands: Record<string, Command> = {
         (url) =>
           json
             ? out(JSON.stringify({ url, scan: scanned, analysis, suggestions: suggested, found, usage }, null, 2) + "\n")
-            : out(`Review the Suggestions: ${url}\n`),
+            : out(pending > 0 ? `Review ${pending === 1 ? "it" : "them"} in your browser: ${url}\n` : `Open the dashboard: ${url}\n`),
         say,
         "suggestions",
       );
@@ -351,7 +372,7 @@ const commands: Record<string, Command> = {
         return;
       }
       const go = await confirmSpend(ctx, {
-        parts: [{ headline: `${estimate.suggestions} ${plural(estimate.suggestions, "Suggestion")} to write`, models: estimate.models }],
+        parts: [{ headline: `Suggestions: ${estimate.suggestions} to write`, models: estimate.models }],
         what: "Writing Suggestions",
         command: "suggest",
         declined: "Nothing written.",
@@ -593,7 +614,7 @@ async function serveDashboard(
   const server = await listen(createServer({ app, uiDir: serve.uiDir }), { port: serve.port });
   const url = new URL(screen, server.url).href;
   announce(url);
-  say("Press Ctrl-C to stop.\n");
+  say("Press Ctrl-C to stop the dashboard.\n");
   if (serve.open) serve.openBrowser?.(url);
   await stopped(signal);
   await server.close();
@@ -654,8 +675,45 @@ function count(n: number): string {
   return n.toLocaleString("en-US");
 }
 
-function dollars(usd: number): string {
-  return `$${usd.toFixed(2)}`;
+/**
+ * What `run` did about Suggestions: how many it wrote, or why it wrote none,
+ * and how many earlier ones still wait for review.
+ */
+function suggestionsFound(
+  written: number,
+  pending: number,
+  sources: number,
+  near: number,
+  suggested: SuggestResult | null,
+  window: ScanWindow,
+): string {
+  const earlier = pending - written;
+  const waiting = earlier > 0 ? `, plus ${count(earlier)} from earlier still waiting` : "";
+  if (written > 0) return `${count(written)} new ${plural(written, "Suggestion")} to review${waiting}`;
+  let why: string;
+  if (sources === 0) {
+    const close = near > 0 ? ` (${count(near)} ${near === 1 ? "is" : "are"} close)` : "";
+    const days = /^(\d+)([dw])$/.exec(window.since ?? "");
+    const longer = days && Number(days[1]) * (days[2] === "w" ? 7 : 1) < 90 ? "--since 90d" : "a longer --since";
+    why = `no Workflow or Correction repeats often enough yet${close}; scan more history with ${longer}`;
+  } else if ((suggested?.failed.length ?? 0) > 0) {
+    why = "writing them failed";
+  } else {
+    why = "every Workflow and repeated Correction already has one";
+  }
+  return `No new Suggestions: ${why}${waiting}`;
+}
+
+/** "Analysis: 3 new or changed Sessions (27 already analyzed, not charged again)". */
+function analysisHeadline({ sessions, alreadyAnalyzed }: AnalysisEstimate): string {
+  const already = alreadyAnalyzed > 0 ? ` (${count(alreadyAnalyzed)} already analyzed, not charged again)` : "";
+  return `Analysis: ${count(sessions)} new or changed ${plural(sessions, "Session")}${already}`;
+}
+
+/** A cost in US dollars; one under a cent reads "less than $0.01", never "$0.00". */
+function money(usd: number): string {
+  if (usd === 0) return "$0";
+  return usd < 0.01 ? "less than $0.01" : `$${usd.toFixed(2)}`;
 }
 
 /**
@@ -674,13 +732,17 @@ async function confirmSpend(
   },
 ): Promise<true | number | undefined> {
   const say = json ? err : out;
-  for (const part of estimate.parts) {
-    say(`${part.headline}. Estimated use${part.atMost ? ", at most" : ""}:\n`);
-    for (const { model, tokens, costUsd } of part.models) {
-      const cost = costUsd === null ? "cost unknown" : `about ${dollars(costUsd)}`;
-      say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
-    }
-  }
+  const rows = estimate.parts.map((part) =>
+    part.models.map(({ model, tokens, costUsd }) => {
+      const bound = part.atMost ? "at most" : "about";
+      const cost = costUsd === null ? "cost unknown" : costUsd < 0.01 ? money(costUsd) : `${bound} ${money(costUsd)}`;
+      return [model, `${bound} ${count(tokens.input)} input + ${count(tokens.output)} output tokens`, cost];
+    }),
+  );
+  estimate.parts.forEach((part, i) => {
+    say(`${part.headline}\n`);
+    say(table(rows[i]!, rows.flat()));
+  });
   const unpriced = [...new Set(estimate.parts.flatMap((p) => p.models).filter((m) => m.costUsd === null).map((m) => m.model))];
   if (unpriced.length > 0) say(unpricedHint(unpriced, configFile));
   if (yes) return true;
@@ -712,18 +774,59 @@ function progressLine({ ask, err }: CommandContext): ((progress: Progress) => vo
   };
 }
 
-function reportScan(result: ScanResult, out: (text: string) => void, warn: (text: string) => void): void {
+function reportScan(
+  result: ScanResult,
+  window: ScanWindow,
+  homeDir: string,
+  out: (text: string) => void,
+  warn: (text: string) => void,
+): void {
   if (result.harnesses.length === 0) {
     out("No Claude Code or Cursor Sessions found on this machine.\n");
     return;
   }
   for (const warning of result.harnesses.flatMap((h) => h.warnings)) warn(`Warning: ${warning}\n`);
-  for (const harness of result.harnesses) {
-    out(
-      `${harness.name}: ${harness.added} ${plural(harness.added, "Session")} added, ` +
-        `${harness.updated} updated, ${harness.unchanged} unchanged\n`,
-    );
-  }
+  out(`Reading ${scanWhat(window)} (read-only)\n`);
+  out(
+    table(
+      result.harnesses.map((h) => [
+        h.name,
+        h.locations.map((l) => tildify(l, homeDir)).join(", "),
+        scanCounts(h.added, h.updated, h.unchanged),
+      ]),
+    ),
+  );
+}
+
+/** "your Sessions from the last 30 days", naming the limits `--since`, `--last` and `--harness` put on a Scan. */
+function scanWhat({ since, last, harnesses }: ScanWindow): string {
+  const yours = harnesses ? `your ${harnesses.join(" and ")} Sessions` : "your Sessions";
+  const which = last === undefined ? (since === undefined ? `all ${yours}` : yours) : last === 1 ? `the most recent of ${yours}` : `the ${count(last)} most recent of ${yours}`;
+  if (since === undefined) return which;
+  const relative = /^(\d+)([dw])$/.exec(since);
+  if (!relative) return `${which} active since ${since}`;
+  const n = Number(relative[1]);
+  const unit = relative[2] === "w" ? "week" : "day";
+  return `${which} from the last ${n === 1 ? unit : `${n} ${unit}s`}`;
+}
+
+/** "10 Sessions, 2 new, 1 changed since the last run", or "…, nothing new". */
+function scanCounts(added: number, updated: number, unchanged: number): string {
+  const total = added + updated + unchanged;
+  const changes = [added > 0 && `${count(added)} new`, updated > 0 && `${count(updated)} changed since the last run`].filter(Boolean);
+  return `${count(total)} ${plural(total, "Session")}, ${changes.length > 0 ? changes.join(", ") : "nothing new"}`;
+}
+
+/** `path` with the home folder shortened to `~`. */
+function tildify(path: string, homeDir: string): string {
+  return path === homeDir || path.startsWith(homeDir + sep) ? `~${path.slice(homeDir.length)}` : path;
+}
+
+/** Rows as indented columns, each padded to its widest cell in `aligned` (by default, the rows themselves). */
+function table(rows: string[][], aligned: string[][] = rows): string {
+  if (rows.length === 0) return "";
+  const widths = rows[0]!.map((_, i) => Math.max(...aligned.map((r) => r[i]!.length)));
+  return rows.map((r) => `  ${r.map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i]!))).join("  ")}\n`).join("");
 }
 
 /** Usage of several steps added up per model; a cost is unknown when any step's is. */
@@ -754,14 +857,31 @@ function failedSource(f: SuggestResult["failed"][number]): string {
 function perSuggestion({ suggestions, models }: { suggestions: number; models: ModelUsage[] }): string {
   if (suggestions === 0 || models.some((m) => m.costUsd === null)) return "";
   const each = models.reduce((sum, m) => sum + m.costUsd!, 0) / suggestions;
+  if (each < 0.001) return ", less than $0.001 each";
   return `, about $${each < 0.01 ? each.toFixed(3) : each.toFixed(2)} each`;
 }
 
+/** The total cost a command ran up, then the tokens and cost of each model. */
 function reportUsage(out: (text: string) => void, usage: readonly ModelUsage[]): void {
-  for (const { model, tokens, costUsd } of usage) {
-    const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
-    out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
-  }
+  if (usage.length === 0) return;
+  const known = usage.reduce((sum, u) => sum + (u.costUsd ?? 0), 0);
+  const unpriced = usage.filter((u) => u.costUsd === null).map((u) => u.model);
+  const total =
+    unpriced.length === usage.length
+      ? "unknown"
+      : unpriced.length > 0
+        ? `${money(known)}, plus ${unpriced.join(" and ")} at an unknown price`
+        : money(known);
+  out(`Cost: ${total}\n`);
+  out(
+    table(
+      usage.map(({ model, tokens, costUsd }) => [
+        model,
+        `${count(tokens.input)} input + ${count(tokens.output)} output tokens`,
+        costUsd === null ? "cost unknown" : money(costUsd),
+      ]),
+    ),
+  );
 }
 
 /** "2 more Tasks and 1 more Session", leaving out what is not needed. */
@@ -956,6 +1076,12 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       last,
       harnesses,
       since,
+      scanWindow: {
+        since: window,
+        last,
+        harnesses: harnesses?.map((h) => (io.adapters ?? allAdapters).find((a) => a.harness === h)!.displayName),
+      },
+      homeDir: io.homeDir,
       editFile: io.editFile ?? ((path) => openInEditor(path, io.env)),
       dataDir: dataDir(io.homeDir),
       serve,
