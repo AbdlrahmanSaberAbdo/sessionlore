@@ -81,11 +81,12 @@ const replyTokensPerMessage = 15;
 /** The tokens splitting these User Messages into Tasks is expected to use, without calling the Model Provider. */
 export function estimateTaskSplit(messages: readonly string[]): TokenCount {
   if (messages.length === 0) return { input: 0, output: 0 };
-  const chars = system.length + taskSplitPrompt(messages).length;
-  return {
-    input: Math.ceil(chars / charsPerToken) + requestOverheadTokens,
-    output: replyTokensPerTask + replyTokensPerMessage * messages.length,
-  };
+  return estimateRequest(system, taskSplitPrompt(messages), replyTokensPerTask + replyTokensPerMessage * messages.length);
+}
+
+/** The tokens one structured request with this system text and prompt is expected to use, given its expected reply size. */
+export function estimateRequest(system: string, prompt: string, outputTokens: number): TokenCount {
+  return { input: Math.ceil((system.length + prompt.length) / charsPerToken) + requestOverheadTokens, output: outputTokens };
 }
 
 /** Splits a Session into Tasks and labels the Intent of every User Message, using `model`. */

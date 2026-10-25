@@ -1,5 +1,6 @@
 export {
   analysisFingerprint,
+  estimateRequest,
   estimateTaskSplit,
   intents,
   MalformedReplyError,
@@ -13,6 +14,8 @@ export {
   CLUSTER_SIMILARITY,
   clusterNamePrompt,
   correctionClusterNamePrompt,
+  estimateClusterName,
+  estimateCorrectionClusterName,
   nameCorrectionCluster,
   nameCluster,
   placeTasks,
@@ -25,6 +28,8 @@ export {
 } from "./clusters.js";
 export { applyRepeatRule, defaultRepeatRule, type Member, type RepeatRule, type RepeatRuleResult } from "./repeat-rule.js";
 export {
+  estimateRule,
+  estimateSkill,
   RULE_EVIDENCE_SAMPLE,
   rulePrompt,
   SKILL_EVIDENCE_SAMPLE,

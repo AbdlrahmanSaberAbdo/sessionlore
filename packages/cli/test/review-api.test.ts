@@ -85,7 +85,7 @@ async function cli(at: FixtureHome, ...args: string[]) {
 async function suggestAll(at: FixtureHome = home) {
   await cli(at, "scan");
   expect((await cli(at, "analyze", "--json", "--yes")).json().failed).toEqual([]);
-  await cli(at, "suggest", "--json");
+  await cli(at, "suggest", "--json", "--yes");
   const all = (await cli(at, "review", "--json")).json().suggestions as any[];
   return { skill: all.find((s) => s.kind === "skill").id as number, rule: all.find((s) => s.kind === "rule").id as number };
 }

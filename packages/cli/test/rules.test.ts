@@ -69,7 +69,7 @@ async function analyze(opts: RunOptions) {
 }
 
 async function suggest(opts: RunOptions) {
-  const result = await runCli(home, ["suggest", "--json"], opts);
+  const result = await runCli(home, ["suggest", "--json", "--yes"], opts);
   expect(result.exitCode, result.stderr).toBe(0);
   return result.json();
 }
@@ -167,7 +167,7 @@ describe("suggest Rules", () => {
     const pnpm = (await runCli(home, ["corrections", "--json"], opts)).json().correctionClusters[0];
 
     const together = { ...opts, embedder: topicEmbedder(["no, "], "embedder-together") };
-    const reclustered = await runCli(home, ["recluster", "--json"], together);
+    const reclustered = await runCli(home, ["recluster", "--json", "--yes"], together);
     expect(reclustered.exitCode, reclustered.stderr).toBe(0);
 
     const [rule] = await review();

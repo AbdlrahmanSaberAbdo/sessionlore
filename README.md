@@ -85,13 +85,15 @@ npx sessionlore corrections   # corrections you keep typing
 npx sessionlore tasks         # every task with its labels
 ```
 
+Workflows stay put between runs, so their history stays comparable. `npx sessionlore recluster` rebuilds the grouping from scratch on request, keeping each old workflow's id where its tasks went; when that leaves new groups to name, it shows the cheap model's estimated cost and asks first (`--yes` skips the question).
+
 ### 5. Suggest
 
 ```bash
 npx sessionlore suggest
 ```
 
-Uses the strong model to draft a skill for each workflow and a rule for each repeated correction that has none yet. If you already have a matching skill or rule, the draft updates it instead.
+Uses the strong model to draft a skill for each workflow and a rule for each repeated correction that has none yet. If you already have a matching skill or rule, the draft updates it instead. Like `analyze`, it shows a cost estimate and asks before calling the model; `--yes` skips the question.
 
 ### 6. Review
 

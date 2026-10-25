@@ -706,28 +706,46 @@ export class Store {
     this.place("tasks", placements, at);
   }
 
-  /** Every Task with a `modelId` embedding and the Cluster it is in now, oldest Session first. */
-  embeddedTasks(modelId: string): { key: number; vector: number[]; cluster: number | null }[] {
+  /** Every Task with a `modelId` embedding, its title and the Cluster it is in now, oldest Session first. */
+  embeddedTasks(modelId: string): { key: number; vector: number[]; cluster: number | null; text: string }[] {
     return this.db
-      .all<{ id: number; embedding: Uint8Array; cluster_id: number | null }>(
-        `SELECT t.id, t.embedding, t.cluster_id FROM tasks t JOIN sessions s ON s.id = t.session_id
+      .all<{ id: number; embedding: Uint8Array; cluster_id: number | null; title: string }>(
+        `SELECT t.id, t.embedding, t.cluster_id, t.title FROM tasks t JOIN sessions s ON s.id = t.session_id
           WHERE t.embedding IS NOT NULL AND t.embedding_model = ?
           ORDER BY s.started_at, s.id, t.position`,
         modelId,
       )
-      .map((t) => ({ key: t.id, vector: decodeVector(t.embedding), cluster: t.cluster_id }));
+      .map((t) => ({ key: t.id, vector: decodeVector(t.embedding), cluster: t.cluster_id, text: t.title }));
   }
 
-  /** Every Correction with a `modelId` embedding and the Correction Cluster it is in now, oldest Session first. */
-  embeddedCorrections(modelId: string): { key: number; vector: number[]; cluster: number | null }[] {
+  /** Every Correction with a `modelId` embedding, its text and the Correction Cluster it is in now, oldest Session first. */
+  embeddedCorrections(modelId: string): { key: number; vector: number[]; cluster: number | null; text: string }[] {
     return this.db
-      .all<{ id: number; embedding: Uint8Array; correction_cluster_id: number | null }>(
-        `SELECT m.id, m.embedding, m.correction_cluster_id FROM user_messages m JOIN sessions s ON s.id = m.session_id
+      .all<{ id: number; embedding: Uint8Array; correction_cluster_id: number | null; text: string }>(
+        `SELECT m.id, m.embedding, m.correction_cluster_id, m.text FROM user_messages m JOIN sessions s ON s.id = m.session_id
           WHERE m.intent = 'Correction' AND m.embedding IS NOT NULL AND m.embedding_model = ?
           ORDER BY s.started_at, s.id, m.position`,
         modelId,
       )
-      .map((m) => ({ key: m.id, vector: decodeVector(m.embedding), cluster: m.correction_cluster_id }));
+      .map((m) => ({ key: m.id, vector: decodeVector(m.embedding), cluster: m.correction_cluster_id, text: m.text }));
+  }
+
+  /** Ids of the Clusters (or Correction Clusters) the cheap model has named. */
+  namedClusters(kind: ClusterKind): Set<number> {
+    const { clusters } = clusterTables[kind];
+    return new Set(this.db.all<{ id: number }>(`SELECT id FROM ${clusters} WHERE name IS NOT NULL`).map((c) => c.id));
+  }
+
+  /** How many Clusters (or Correction Clusters) are unnamed and have fewer than `minMembers` members. */
+  smallUnnamedClusters(kind: ClusterKind, minMembers: number): number {
+    const { clusters, members, column, isMember } = clusterTables[kind];
+    return Number(
+      this.db.get<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM ${clusters} c
+          WHERE c.name IS NULL AND (SELECT COUNT(*) FROM ${members} WHERE ${column} = c.id AND ${isMember}) < ?`,
+        minMembers,
+      )?.n ?? 0,
+    );
   }
 
   /**

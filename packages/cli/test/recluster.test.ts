@@ -211,7 +211,7 @@ const apart = () => topicEmbedder(["database migration", "schema migration"], "e
 const together = () => topicEmbedder(["migration"], "embedder-together");
 
 async function recluster(options: RunOptions) {
-  const result = await runCli(home, ["recluster", "--json"], options);
+  const result = await runCli(home, ["recluster", "--json", "--yes"], options);
   expect(result.exitCode, result.stderr).toBe(0);
   return result.json();
 }
@@ -278,7 +278,7 @@ describe("recluster", () => {
     ).modelProvider;
     await analyze({ modelProvider, embedder: apart(), clock: now });
     const database = (await workflows()).workflows.find((w: any) => w.name === "Write database migrations");
-    const suggested = await runCli(home, ["suggest", "--json"], { modelProvider, clock: now });
+    const suggested = await runCli(home, ["suggest", "--json", "--yes"], { modelProvider, clock: now });
     expect(suggested.json().created).toHaveLength(2);
 
     await recluster({ modelProvider, embedder: together(), clock: now });
@@ -289,7 +289,7 @@ describe("recluster", () => {
       { id: database.id, name: "Write database migrations" },
     ]);
     // The merged Workflow holds no Tasks those Suggestions weren't derived from, so it needs no new one.
-    const again = await runCli(home, ["suggest", "--json"], { modelProvider, clock: now });
+    const again = await runCli(home, ["suggest", "--json", "--yes"], { modelProvider, clock: now });
     expect(again.json()).toMatchObject({ created: [], replaced: [] });
   });
 

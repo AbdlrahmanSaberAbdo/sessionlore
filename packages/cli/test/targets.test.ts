@@ -73,7 +73,7 @@ async function analyze(opts: RunOptions) {
 }
 
 async function suggest(opts: RunOptions) {
-  const result = await runCli(home, ["suggest", "--json"], opts);
+  const result = await runCli(home, ["suggest", "--json", "--yes"], opts);
   expect(result.exitCode, result.stderr).toBe(0);
   return result.json();
 }

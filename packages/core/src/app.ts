@@ -6,6 +6,10 @@ import {
   analysisFingerprint,
   applyRepeatRule,
   defaultRepeatRule,
+  estimateClusterName,
+  estimateCorrectionClusterName,
+  estimateRule,
+  estimateSkill,
   estimateTaskSplit,
   MalformedReplyError,
   nameCluster,
@@ -17,9 +21,11 @@ import {
   taskSplitPrompt,
   writeRule,
   writeSkill,
+  type CorrectionClusterForRule,
   type RepeatRule,
   type RepeatRuleResult,
   type TokenCount,
+  type WorkflowForSkill,
 } from "@sessionlore/analysis";
 import { correctionsPerWeek, TOP_WORKFLOWS, type Overview } from "./overview.js";
 import {
@@ -372,8 +378,47 @@ export class SuggestionStateError extends Error {
 export interface AnalysisEstimate {
   /** Number of new or changed Sessions. */
   sessions: number;
+  /** Includes naming the Clusters the Analysis may form, counted as an upper bound. */
   models: ModelUsage[];
 }
+
+/** Expected token use per model for the Suggestions the next `suggest` would write. */
+export interface SuggestEstimate {
+  /** Number of Workflows and Correction Clusters it would write a Suggestion for. */
+  suggestions: number;
+  models: ModelUsage[];
+}
+
+/** Expected token use per model for naming the Clusters the next `recluster` would form. */
+export interface ReclusterEstimate {
+  /** Number of new or unnamed Clusters and Correction Clusters it would name. */
+  clusters: number;
+  models: ModelUsage[];
+}
+
+/** What `suggest` will ask the strong model for one Workflow or Correction Cluster that needs a Suggestion. */
+type SuggestionPlan =
+  | {
+      kind: "skill";
+      workflow: ClusterView;
+      next: NonNullable<ReturnType<typeof nextSuggestion>>;
+      /** Null when finding what it overlaps failed; `error` says why. */
+      input: WorkflowForSkill | null;
+      target: Target | null;
+      plugin: { plugin: string; name: string } | null;
+      error?: unknown;
+    }
+  | {
+      kind: "rule";
+      cluster: CorrectionClusterView;
+      next: NonNullable<ReturnType<typeof nextSuggestion>>;
+      input: CorrectionClusterForRule | null;
+      target: Target | null;
+      error?: unknown;
+    };
+
+/** Stand-in text for a Task title or Correction not written yet, for estimates. */
+const PLACEHOLDER_TITLE = "x".repeat(60);
 
 /** Adds up tokens per model and prices them. */
 class UsageTally {
@@ -487,11 +532,33 @@ export class App {
 
   /** What the next `analyze()` would send, estimated without calling the Model Provider. */
   estimateAnalysis(): AnalysisEstimate {
-    const modelProvider = this.requireModelProvider();
+    const model = this.requireModelProvider().cheap.modelId;
     const sessions = this.sessionsToAnalyze();
     const usage = new UsageTally(this.deps.prices);
-    for (const session of sessions) usage.add(modelProvider.cheap.modelId, estimateTaskSplit(session.userMessages));
+    for (const session of sessions) usage.add(model, estimateTaskSplit(session.userMessages));
+    const messages = sessions.flatMap((s) => s.userMessages);
+    if (this.deps.embedder && messages.length > 0) {
+      // Clusters waiting for a name are named again, and the new Tasks can make at most this many more big enough to name:
+      // each needs at least one new Task to complete a small unnamed Cluster, or `showable` of them to start one.
+      const showable = this.showableSize;
+      const newlyShowable = (kind: ClusterKind) =>
+        Math.min(messages.length, this.store.smallUnnamedClusters(kind, showable) + Math.floor(messages.length / showable));
+      const typical = messages.map((m) => m.slice(0, 200));
+      for (const c of this.store.unnamedClusters(showable)) usage.add(model, estimateClusterName(c.taskTitles));
+      for (let i = 0; i < newlyShowable("tasks"); i++) {
+        usage.add(model, estimateClusterName(new Array<string>(showable).fill(PLACEHOLDER_TITLE)));
+      }
+      for (const c of this.store.unnamedCorrectionClusters(showable)) usage.add(model, estimateCorrectionClusterName(c.corrections));
+      for (let i = 0; i < newlyShowable("corrections"); i++) {
+        usage.add(model, estimateCorrectionClusterName(typical.slice(i * showable, (i + 1) * showable)));
+      }
+    }
     return { sessions: sessions.length, models: usage.byModel() };
+  }
+
+  /** A Cluster can only be listed once it has this many members, so smaller ones need no name yet. */
+  private get showableSize(): number {
+    return Math.min(NEAR_MIN_MEMBERS, this.repeatRule.minMembers);
   }
 
   private requireModelProvider(): ModelProvider {
@@ -582,9 +649,7 @@ export class App {
   }
 
   private async nameClusters(model: ModelProvider["cheap"], usage: UsageTally, signal: AbortSignal | undefined): Promise<void> {
-    // A Cluster can only be listed once it has this many Tasks, so smaller ones need no name yet.
-    const showable = Math.min(NEAR_WORKFLOW_MIN_TASKS, this.repeatRule.minMembers);
-    for (const cluster of this.store.unnamedClusters(showable)) {
+    for (const cluster of this.store.unnamedClusters(this.showableSize)) {
       if (signal?.aborted) return;
       try {
         const { name, tokens } = await nameCluster(model, cluster.taskTitles, signal);
@@ -603,6 +668,33 @@ export class App {
    * from an old one keeps its id and name, and anything attached to an old
    * Cluster follows it to the Cluster it mapped to.
    */
+  async estimateRecluster(): Promise<ReclusterEstimate> {
+    const embedder = this.deps.embedder;
+    if (!embedder) throw new Error("Re-clustering needs the local Embedder, which is not available.");
+    const usage = new UsageTally(this.deps.prices);
+    const model = this.deps.modelProvider?.cheap.modelId;
+    if (model === undefined) return { clusters: 0, models: [] };
+    await this.embedTasks(embedder);
+    await this.embedCorrections(embedder);
+    let clusters = 0;
+    const kinds = [
+      ["tasks", this.store.embeddedTasks(embedder.modelId), estimateClusterName],
+      ["corrections", this.store.embeddedCorrections(embedder.modelId), estimateCorrectionClusterName],
+    ] as const;
+    for (const [kind, members, estimate] of kinds) {
+      const named = this.store.namedClusters(kind);
+      const text = new Map(members.map((m) => [m.key, m.text]));
+      const { groups, heirs } = this.groupFromScratch(members);
+      groups.forEach((group, i) => {
+        const heir = heirs[i];
+        if (group.length < this.showableSize || (heir !== undefined && named.has(heir))) return;
+        clusters += 1;
+        usage.add(model, estimate(group.map((m) => text.get(m)!)));
+      });
+    }
+    return { clusters, models: usage.byModel() };
+  }
+
   async recluster(options: { signal?: AbortSignal } = {}): Promise<ReclusterResult> {
     const embedder = this.deps.embedder;
     if (!embedder) throw new Error("Re-clustering needs the local Embedder, which is not available.");
@@ -635,13 +727,8 @@ export class App {
    * old Clusters (ADR 0008). `report` then says where each old Cluster went,
    * given the Cluster names from before and after.
    */
-  private regroup(kind: ClusterKind, members: readonly { key: number; vector: number[]; cluster: number | null }[]) {
-    const groups: number[][] = [];
-    for (const placement of placeTasks([], members.map((m) => ({ task: m.key, vector: m.vector })))) {
-      if ("newCluster" in placement) (groups[placement.newCluster] ??= []).push(placement.task);
-    }
-    const oldCluster = new Map(members.map((m) => [m.key, m.cluster ?? undefined]));
-    const { heirs, targets } = succession(groups, (member: number) => oldCluster.get(member));
+  private regroup(kind: ClusterKind, members: readonly ClusterMember[]) {
+    const { groups, heirs, targets } = this.groupFromScratch(members);
     const ids = this.store.recluster(
       kind,
       groups.map((members, i) => ({ heir: heirs[i], members })),
@@ -659,6 +746,16 @@ export class App {
         };
       },
     };
+  }
+
+  /** Groups `members` from scratch, and which old Cluster each new group takes over from (ADR 0008). Changes nothing. */
+  private groupFromScratch(members: readonly ClusterMember[]) {
+    const groups: number[][] = [];
+    for (const placement of placeTasks([], members.map((m) => ({ task: m.key, vector: m.vector })))) {
+      if ("newCluster" in placement) (groups[placement.newCluster] ??= []).push(placement.task);
+    }
+    const oldCluster = new Map(members.map((m) => [m.key, m.cluster ?? undefined]));
+    return { groups, ...succession(groups, (member: number) => oldCluster.get(member)) };
   }
 
   /**
@@ -703,8 +800,7 @@ export class App {
     usage: UsageTally,
     signal: AbortSignal | undefined,
   ): Promise<void> {
-    const showable = Math.min(NEAR_WORKFLOW_MIN_TASKS, this.repeatRule.minMembers);
-    for (const cluster of this.store.unnamedCorrectionClusters(showable)) {
+    for (const cluster of this.store.unnamedCorrectionClusters(this.showableSize)) {
       if (signal?.aborted) return;
       try {
         const { name, tokens } = await nameCorrectionCluster(model, cluster.corrections, signal);
@@ -745,7 +841,7 @@ export class App {
         counted: { corrections: verdict.counted.members, sessions: verdict.counted.sessions },
       };
       if (verdict.passes) result.correctionClusters.push(view);
-      else if (verdict.counted.members >= Math.min(NEAR_WORKFLOW_MIN_TASKS, rule.minMembers)) {
+      else if (verdict.counted.members >= this.showableSize) {
         result.nearCorrectionClusters.push({
           ...view,
           needs: { corrections: verdict.needs.members, sessions: verdict.needs.sessions },
@@ -769,7 +865,7 @@ export class App {
       if (!judged) continue;
       const { view, verdict } = judged;
       if (verdict.passes) result.workflows.push(view);
-      else if (verdict.counted.members >= Math.min(NEAR_WORKFLOW_MIN_TASKS, rule.minMembers)) {
+      else if (verdict.counted.members >= this.showableSize) {
         result.nearWorkflows.push({ ...view, needs: { tasks: verdict.needs.members, sessions: verdict.needs.sessions } });
       }
     }
@@ -1113,16 +1209,80 @@ export class App {
     const model = this.requireModelProvider().strong;
     const usage = new UsageTally(this.deps.prices);
     const result: SuggestResult = { created: [], replaced: [], failed: [], usage: [] };
-    const overlaps = new Overlaps(this.deps.renderers ?? [], this.installedContext.bind(this), this.deps.embedder);
-    const prior = this.store.priorSuggestions("skill");
-    for (const workflow of this.listWorkflows().workflows) {
+    for (const plan of await this.suggestionPlans(signal)) {
       if (signal?.aborted) break;
+      const source = plan.kind === "skill" ? { workflow: plan.workflow.id } : { correctionCluster: plan.cluster.id };
+      try {
+        if (plan.error !== undefined || plan.input === null) throw plan.error;
+        let id: number;
+        if (plan.kind === "skill") {
+          const { skill, tokens } = await writeSkill(model, plan.input as WorkflowForSkill, signal);
+          usage.add(model.modelId, tokens);
+          if (signal?.aborted) break;
+          id = this.store.createSuggestion({
+            kind: "skill",
+            workflow: { id: plan.workflow.id, name: plan.workflow.name },
+            title: skill.title,
+            trigger: skill.trigger,
+            steps: skill.steps,
+            ...withTarget(plan.next.write, plan.target),
+            companionOf: plan.plugin,
+            createdAt: this.deps.clock.now(),
+          });
+        } else {
+          const { rule, tokens } = await writeRule(model, plan.input as CorrectionClusterForRule, signal);
+          usage.add(model.modelId, tokens);
+          if (signal?.aborted) break;
+          id = this.store.createSuggestion({
+            kind: "rule",
+            correctionCluster: { id: plan.cluster.id, name: plan.cluster.name },
+            title: rule.title,
+            rule: rule.rule,
+            ...withTarget(plan.next.write, plan.target),
+            createdAt: this.deps.clock.now(),
+          });
+        }
+        result.created.push(id);
+        if (plan.next.write.replaces !== undefined) result.replaced.push(plan.next.write.replaces);
+      } catch (error) {
+        if (signal?.aborted) break;
+        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
+        result.failed.push({ ...source, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    result.usage = usage.byModel();
+    return result;
+  }
+
+  /** What the next `suggest` would send the strong model, estimated without calling it. */
+  async estimateSuggestions(): Promise<SuggestEstimate> {
+    const model = this.requireModelProvider().strong.modelId;
+    const usage = new UsageTally(this.deps.prices);
+    const plans = await this.suggestionPlans(undefined);
+    for (const plan of plans) {
+      if (plan.input === null) continue;
+      usage.add(model, plan.kind === "skill" ? estimateSkill(plan.input as WorkflowForSkill) : estimateRule(plan.input as CorrectionClusterForRule));
+    }
+    return { suggestions: plans.length, models: usage.byModel() };
+  }
+
+  /**
+   * Every Workflow and qualifying Correction Cluster that needs a Suggestion
+   * (see `regeneration`), with what the strong model would be asked for it.
+   * Reads installed Skills and Rules, and embeds locally, but calls no model.
+   */
+  private async suggestionPlans(signal: AbortSignal | undefined): Promise<SuggestionPlan[]> {
+    const overlaps = new Overlaps(this.deps.renderers ?? [], this.installedContext.bind(this), this.deps.embedder);
+    const plans: SuggestionPlan[] = [];
+    const priorSkills = this.store.priorSuggestions("skill");
+    for (const workflow of this.listWorkflows().workflows) {
+      if (signal?.aborted) return plans;
       const evidence: Evidence[] = workflow.tasks.map((t) => ({
         task: { title: t.title, at: t.at },
         session: { id: t.session, harness: t.harness },
         project: t.project,
       }));
-      const next = nextSuggestion(evidence, prior);
+      const next = nextSuggestion(evidence, priorSkills);
       if (!next) continue;
       const tasks = workflow.tasks.map((t) => ({
         title: t.title,
@@ -1133,91 +1293,53 @@ export class App {
         const skills = (await overlaps.find("skill", workflow.name, evidence, this.acceptedSuggestion(next.updates))).filter((i) => i.kind === "skill");
         const owned = skills.find((s) => s.plugin === null);
         const plugin = owned ? undefined : skills.find((s) => s.plugin !== null);
-        const { skill, tokens } = await writeSkill(
-          model,
-          {
+        plans.push({
+          kind: "skill",
+          workflow,
+          next,
+          input: {
             name: workflow.name,
             tasks,
             existing: owned && { name: owned.name, content: owned.content },
             companionOf: plugin && { name: `${plugin.plugin}:${plugin.name}`, description: plugin.description },
           },
-          signal,
-        );
-        usage.add(model.modelId, tokens);
-        if (signal?.aborted) break;
-        const target: Target | null = owned ? { kind: "skill", path: owned.path, name: owned.name } : null;
-        const id = this.store.createSuggestion({
-          kind: "skill",
-          workflow: { id: workflow.id, name: workflow.name },
-          title: skill.title,
-          trigger: skill.trigger,
-          steps: skill.steps,
-          ...withTarget(next.write, target),
-          companionOf: plugin ? { plugin: plugin.plugin!, name: plugin.name } : null,
-          createdAt: this.deps.clock.now(),
+          target: owned ? { kind: "skill", path: owned.path, name: owned.name } : null,
+          plugin: plugin ? { plugin: plugin.plugin!, name: plugin.name } : null,
         });
-        result.created.push(id);
-        if (next.write.replaces !== undefined) result.replaced.push(next.write.replaces);
       } catch (error) {
-        if (signal?.aborted) break;
-        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
-        result.failed.push({ workflow: workflow.id, error: error instanceof Error ? error.message : String(error) });
+        plans.push({ kind: "skill", workflow, next, input: null, target: null, plugin: null, error });
       }
     }
-    if (!signal?.aborted) await this.suggestRules(model, usage, result, overlaps, signal);
-    result.usage = usage.byModel();
-    return result;
-  }
-
-  /** Writes a Rule Suggestion for every qualifying Correction Cluster that needs one, as `suggest` does for Workflows. */
-  private async suggestRules(
-    model: ModelProvider["strong"],
-    usage: UsageTally,
-    result: SuggestResult,
-    overlaps: Overlaps,
-    signal: AbortSignal | undefined,
-  ): Promise<void> {
-    const prior = this.store.priorSuggestions("rule");
+    const priorRules = this.store.priorSuggestions("rule");
     for (const cluster of this.listCorrections().correctionClusters) {
-      if (signal?.aborted) return;
+      if (signal?.aborted) return plans;
       const evidence: Evidence[] = cluster.corrections.map((c) => ({
         correction: { text: c.text, at: c.at },
         task: { title: c.task, at: c.taskAt },
         session: { id: c.session, harness: c.harness },
         project: c.project,
       }));
-      const next = nextSuggestion(evidence, prior);
+      const next = nextSuggestion(evidence, priorRules);
       if (!next) continue;
       try {
         // A line already saying this is the Rule's Target, so accepting replaces it instead of adding a second one.
         const [line] = (await overlaps.find("rule", cluster.name, evidence, this.acceptedSuggestion(next.updates))).filter((i) => i.kind === "rule");
-        const { rule, tokens } = await writeRule(
-          model,
-          {
+        plans.push({
+          kind: "rule",
+          cluster,
+          next,
+          input: {
             name: cluster.name,
             corrections: cluster.corrections.map((c) => ({ text: c.text, task: c.task })),
             existingLine: line?.line,
           },
-          signal,
-        );
-        usage.add(model.modelId, tokens);
-        if (signal?.aborted) return;
-        const id = this.store.createSuggestion({
-          kind: "rule",
-          correctionCluster: { id: cluster.id, name: cluster.name },
-          title: rule.title,
-          rule: rule.rule,
-          ...withTarget(next.write, line ? { kind: "rule", path: line.path, line: line.line } : null),
-          createdAt: this.deps.clock.now(),
+          target: line ? { kind: "rule", path: line.path, line: line.line } : null,
         });
-        result.created.push(id);
-        if (next.write.replaces !== undefined) result.replaced.push(next.write.replaces);
       } catch (error) {
-        if (signal?.aborted) return;
-        if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
-        result.failed.push({ correctionCluster: cluster.id, error: error instanceof Error ? error.message : String(error) });
+        plans.push({ kind: "rule", cluster, next, input: null, target: null, error });
       }
     }
+    return plans;
   }
 
   /** Suggestions, oldest first, optionally only those in `state`. */
@@ -1453,8 +1575,19 @@ export class App {
 /** Texts embedded per Embedder call. */
 const EMBED_BATCH = 32;
 
-/** A Cluster that fails the Repeat Rule is a near-Workflow once it has this many Tasks inside the window. */
-const NEAR_WORKFLOW_MIN_TASKS = 2;
+/**
+ * A Cluster (or Correction Cluster) that fails the Repeat Rule is shown as near
+ * passing once it has this many members inside the window.
+ */
+const NEAR_MIN_MEMBERS = 2;
+
+/** A Task or Correction as re-clustering groups it. */
+interface ClusterMember {
+  key: number;
+  vector: number[];
+  /** The Cluster it is in now. */
+  cluster: number | null;
+}
 
 function unrecognizedWarnings(adapter: Adapter, tally: Map<string, number>): string[] {
   if (tally.size === 0) return [];

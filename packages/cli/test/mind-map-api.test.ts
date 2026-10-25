@@ -78,7 +78,7 @@ async function migrationsWorkflow() {
   ]);
   await cli("scan");
   expect((await cli("analyze", "--json", "--yes")).json().failed).toEqual([]);
-  const [suggestion] = (await cli("suggest", "--json")).json().created;
+  const [suggestion] = (await cli("suggest", "--json", "--yes")).json().created;
   return { shop: shop.id, blog: blog.id, cursor: cursor.composerIds[0]!, suggestion: suggestion as number };
 }
 

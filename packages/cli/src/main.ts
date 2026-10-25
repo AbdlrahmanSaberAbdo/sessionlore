@@ -17,6 +17,7 @@ import {
   type Embedder,
   type Env,
   type HarnessId,
+  type ModelUsage,
   type ModelProvider,
   type Renderer,
   type Scope,
@@ -97,7 +98,8 @@ interface Command {
 const commands: Record<string, Command> = {
   analyze: {
     summary: "Split new or changed Sessions into Tasks and label each User Message's Intent",
-    async run({ app, json, yes, ask, signal, options, modelProvider, configFile, out, err }) {
+    async run(ctx) {
+      const { app, json, signal, options, modelProvider, out, err } = ctx;
       if (options.showRedacted !== undefined) {
         const request = app.redactedRequest(options.showRedacted);
         if (request === null) {
@@ -111,31 +113,19 @@ const commands: Record<string, Command> = {
         return 1;
       }
       const estimate = app.estimateAnalysis();
-      // With --json, stdout carries only the result; the estimate and question go to stderr.
-      const say = json ? err : out;
       if (estimate.sessions === 0) {
-        say("No new or changed Sessions to analyze.\n");
+        (json ? err : out)("No new or changed Sessions to analyze.\n");
         if (json) out(JSON.stringify(await app.analyze(), null, 2) + "\n");
         return;
       }
-      say(`${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze. Estimated use:\n`);
-      for (const { model, tokens, costUsd } of estimate.models) {
-        const cost = costUsd === null ? "cost unknown" : `about ${dollars(costUsd)}`;
-        say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
-      }
-      const unpriced = estimate.models.filter((m) => m.costUsd === null).map((m) => m.model);
-      if (unpriced.length > 0) say(unpricedHint(unpriced, configFile));
-      if (!yes) {
-        if (!ask) {
-          err("Analysis needs confirmation before it calls the Model Provider. Run `sessionlore analyze --yes` to go ahead.\n");
-          return 1;
-        }
-        const answer = await ask("Continue? [y/N] ");
-        if (!/^\s*y(es)?\s*$/i.test(answer)) {
-          say("Nothing analyzed.\n");
-          return;
-        }
-      }
+      const go = await confirmSpend(ctx, {
+        headline: `${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze`,
+        models: estimate.models,
+        what: "Analysis",
+        command: "analyze",
+        declined: "Nothing analyzed.",
+      });
+      if (go !== true) return go;
       const result = await app.analyze({ signal });
       const exitCode = result.interrupted ? interruptedExitCode : undefined;
       if (json) {
@@ -153,10 +143,7 @@ const commands: Record<string, Command> = {
         out(`${result.failed.length} ${plural(result.failed.length, "Session")} failed:\n`);
         for (const f of result.failed) out(`  ${f.session}: ${f.error}\n`);
       }
-      for (const { model, tokens, costUsd } of result.usage) {
-        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
-        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
-      }
+      reportUsage(out, result.usage);
       return exitCode;
     },
   },
@@ -204,13 +191,7 @@ const commands: Record<string, Command> = {
         for (const t of w.tasks) out(`  ${t.at.slice(0, 10)}  ${t.harness}  ${t.title}\n`);
       }
       if (result.nearWorkflows.length > 0) out("\nNear-Workflows:\n");
-      for (const w of result.nearWorkflows) {
-        const needs = [
-          w.needs.tasks > 0 ? `${w.needs.tasks} more ${plural(w.needs.tasks, "Task")}` : "",
-          w.needs.sessions > 0 ? `${w.needs.sessions} more ${plural(w.needs.sessions, "Session")}` : "",
-        ].filter(Boolean);
-        out(`  ${w.name}  (needs ${needs.join(" and ")})\n`);
-      }
+      for (const w of result.nearWorkflows) out(`  ${w.name}  (needs ${needsText([w.needs.tasks, "Task"], [w.needs.sessions, "Session"])})\n`);
     },
   },
   workflow: {
@@ -227,7 +208,19 @@ const commands: Record<string, Command> = {
   },
   recluster: {
     summary: "Rebuild every Cluster from scratch, mapping old Workflows onto the new ones",
-    async run({ app, json, signal, out }) {
+    async run(ctx) {
+      const { app, json, signal, out } = ctx;
+      const estimate = await app.estimateRecluster();
+      if (estimate.clusters > 0) {
+        const go = await confirmSpend(ctx, {
+          headline: `${estimate.clusters} new ${plural(estimate.clusters, "Cluster")} to name`,
+          models: estimate.models,
+          what: "Re-clustering",
+          command: "recluster",
+          declined: "Nothing re-clustered.",
+        });
+        if (go !== true) return go;
+      }
       const result = await app.recluster({ signal });
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       const sections = [
@@ -243,29 +236,38 @@ const commands: Record<string, Command> = {
         for (const { from, to } of mapped) out(from.id === to.id ? `  ${from.name}: kept\n` : `  ${from.name} -> ${to.name}\n`);
         for (const c of created) out(`  New: ${c.name}\n`);
       }
-      for (const { model, tokens, costUsd } of result.usage) {
-        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
-        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
-      }
+      reportUsage(out, result.usage);
     },
   },
   suggest: {
     summary: "Write Suggestions with the strong model: a Skill for each Workflow and a Rule for each Correction Cluster that has none",
-    async run({ app, json, signal, modelProvider, out, err }) {
+    async run(ctx) {
+      const { app, json, signal, modelProvider, out, err } = ctx;
       if (!modelProvider.ok) {
         err(modelProvider.problem);
         return 1;
       }
+      const estimate = await app.estimateSuggestions();
+      if (estimate.suggestions === 0) {
+        (json ? err : out)("No Workflow or Correction Cluster needs a Suggestion.\n");
+        if (json) out(JSON.stringify(await app.suggest(), null, 2) + "\n");
+        return;
+      }
+      const go = await confirmSpend(ctx, {
+        headline: `${estimate.suggestions} ${plural(estimate.suggestions, "Suggestion")} to write`,
+        models: estimate.models,
+        what: "Writing Suggestions",
+        command: "suggest",
+        declined: "Nothing written.",
+      });
+      if (go !== true) return go;
       const result = await app.suggest({ signal });
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       out(`${result.created.length} ${plural(result.created.length, "Suggestion")} written\n`);
       for (const f of result.failed) {
         out(`  ${"workflow" in f ? `Workflow ${f.workflow}` : `Correction Cluster ${f.correctionCluster}`} failed: ${f.error}\n`);
       }
-      for (const { model, tokens, costUsd } of result.usage) {
-        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
-        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
-      }
+      reportUsage(out, result.usage);
       if (result.created.length > 0) out("Run `sessionlore review` to see them.\n");
     },
   },
@@ -381,11 +383,7 @@ const commands: Record<string, Command> = {
       }
       if (result.nearCorrectionClusters.length > 0) out("\nNear Correction Clusters:\n");
       for (const c of result.nearCorrectionClusters) {
-        const needs = [
-          c.needs.corrections > 0 ? `${c.needs.corrections} more ${plural(c.needs.corrections, "Correction")}` : "",
-          c.needs.sessions > 0 ? `${c.needs.sessions} more ${plural(c.needs.sessions, "Session")}` : "",
-        ].filter(Boolean);
-        out(`  ${c.name}  (needs ${needs.join(" and ")})\n`);
+        out(`  ${c.name}  (needs ${needsText([c.needs.corrections, "Correction"], [c.needs.sessions, "Session"])})\n`);
       }
     },
   },
@@ -566,6 +564,50 @@ function dollars(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
+/**
+ * Shows what a command expects to spend and, unless `--yes`, asks to go ahead.
+ * With `--json`, stdout carries only the result, so the estimate and question
+ * go to stderr. Resolves to true to go ahead, or the exit code to stop with.
+ */
+async function confirmSpend(
+  { json, yes, ask, configFile, out, err }: CommandContext,
+  estimate: { headline: string; models: ModelUsage[]; what: string; command: string; declined: string },
+): Promise<true | number | undefined> {
+  const say = json ? err : out;
+  say(`${estimate.headline}. Estimated use:\n`);
+  for (const { model, tokens, costUsd } of estimate.models) {
+    const cost = costUsd === null ? "cost unknown" : `about ${dollars(costUsd)}`;
+    say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+  }
+  const unpriced = estimate.models.filter((m) => m.costUsd === null).map((m) => m.model);
+  if (unpriced.length > 0) say(unpricedHint(unpriced, configFile));
+  if (yes) return true;
+  if (!ask) {
+    err(`${estimate.what} needs confirmation before it calls the Model Provider. Run \`sessionlore ${estimate.command} --yes\` to go ahead.\n`);
+    return 1;
+  }
+  const answer = await ask("Continue? [y/N] ");
+  if (/^\s*y(es)?\s*$/i.test(answer)) return true;
+  say(`${estimate.declined}\n`);
+  return undefined;
+}
+
+/** The tokens and cost a command actually used, per model. */
+function reportUsage(out: (text: string) => void, usage: readonly ModelUsage[]): void {
+  for (const { model, tokens, costUsd } of usage) {
+    const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
+    out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+  }
+}
+
+/** "2 more Tasks and 1 more Session", leaving out what is not needed. */
+function needsText(...needs: [number, string][]): string {
+  return needs
+    .filter(([n]) => n > 0)
+    .map(([n, word]) => `${n} more ${plural(n, word)}`)
+    .join(" and ");
+}
+
 function unpricedHint(models: string[], configFile: string): string {
   const example = JSON.stringify({ prices: { [models[0]!]: { inputPerMillion: 1, outputPerMillion: 5 } } });
   return `  sessionlore does not know the price of ${models.join(", ")}. To see costs, add US dollars per million tokens to ${configFile}:\n    ${example}\n`;
@@ -583,7 +625,7 @@ function usage(): string {
     `Options:\n  --json                     Machine-readable output\n` +
     `  --last N                   scan: read only the N most recent Sessions\n` +
     `  --harness <id>             scan: read only claude-code or cursor (repeat, or separate with commas)\n` +
-    `  --yes, -y                  analyze: skip the cost estimate confirmation\n` +
+    `  --yes, -y                  analyze, suggest, recluster: skip the cost estimate confirmation\n` +
     `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n` +
     `  --export                   stats: print aggregate numbers only (counts, Corrections per Task, Workflow names)\n` +
     `  --anonymize                stats --export: replace Workflow names with neutral labels\n` +
