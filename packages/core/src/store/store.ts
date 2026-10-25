@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import type { HarnessId, HarnessMessage, HarnessSession, TokenUsage } from "../adapter.js";
 import type { Intent, SplitTask } from "@sessionlore/analysis";
 import type { ResolvedProject } from "../project.js";
-import type { Evidence, PriorSuggestion, Scope, Suggestion, SuggestionKind, SuggestionState } from "../suggestion.js";
+import type { Evidence, PluginSkillRef, PriorSuggestion, Scope, Suggestion, SuggestionKind, SuggestionState, Target } from "../suggestion.js";
 import { openDatabase, type Database, type SqlValue } from "./database.js";
 import { migrate } from "./migrations.js";
 
@@ -129,8 +129,16 @@ export type NewSuggestion = {
   /** A Pending Suggestion this one supersedes; it is removed in the same transaction. */
   replaces?: number;
   createdAt: Date;
+  /** The existing Skill or Rule it updates. */
+  target?: Target | null;
 } & (
-  | { kind: "skill"; workflow: { id: number; name: string }; trigger: string; steps: readonly string[] }
+  | {
+      kind: "skill";
+      workflow: { id: number; name: string };
+      trigger: string;
+      steps: readonly string[];
+      companionOf?: PluginSkillRef | null;
+    }
   | { kind: "rule"; correctionCluster: { id: number; name: string }; rule: string }
 );
 
@@ -800,8 +808,8 @@ export class Store {
       const { scope } = input;
       const id = this.db.run(
         `INSERT INTO suggestions (kind, state, cluster_id, correction_cluster_id, workflow_name, title, trigger, body,
-                                  scope_kind, scope_root, scope_name, scope_overridden, fingerprint, created_at)
-         VALUES (?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                  scope_kind, scope_root, scope_name, scope_overridden, fingerprint, created_at, target, companion_of)
+         VALUES (?, 'Pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         input.kind,
         input.kind === "skill" ? input.workflow.id : null,
         input.kind === "rule" ? input.correctionCluster.id : null,
@@ -817,6 +825,8 @@ export class Store {
         input.scopeOverridden ? 1 : 0,
         JSON.stringify(input.fingerprint),
         input.createdAt.toISOString(),
+        input.target ? JSON.stringify(input.target) : null,
+        input.kind === "skill" && input.companionOf ? JSON.stringify(input.companionOf) : null,
       ).lastInsertRowid;
       input.evidence.forEach((e, position) => {
         this.db.run(
@@ -941,6 +951,8 @@ export class Store {
       accepted_at: string | null;
       rejected_at: string | null;
       installed_files: string;
+      target: string | null;
+      companion_of: string | null;
     }>(
       `SELECT g.*, c.name AS cluster_name, cc.name AS correction_cluster_name
          FROM suggestions g
@@ -984,6 +996,7 @@ export class Store {
         acceptedAt: row.accepted_at,
         rejectedAt: row.rejected_at,
         installedFiles: JSON.parse(row.installed_files) as string[],
+        target: row.target === null ? null : (JSON.parse(row.target) as Target),
       };
       const sourceName = row.workflow_name ?? row.title;
       if (row.kind === "rule") {
@@ -1003,8 +1016,34 @@ export class Store {
         trigger: row.trigger,
         steps: body.steps ?? [],
         workflow: row.cluster_id === null ? null : { id: row.cluster_id, name: row.cluster_name ?? sourceName },
+        companionOf: row.companion_of === null ? null : (JSON.parse(row.companion_of) as PluginSkillRef),
       };
     });
+  }
+
+  /** Keeps the content a file had before accepting a Suggestion overwrote it. */
+  addBackup(suggestionId: number, path: string, content: string, at: Date): void {
+    this.db.run(
+      "INSERT INTO suggestion_backups (suggestion_id, path, content, created_at) VALUES (?, ?, ?, ?)",
+      suggestionId,
+      path,
+      content,
+      at.toISOString(),
+    );
+  }
+
+  /** A Suggestion's backups, in the order they were taken. */
+  backups(suggestionId: number): { id: number; path: string; content: string; restoredAt: string | null }[] {
+    return this.db
+      .all<{ id: number; path: string; content: string; restored_at: string | null }>(
+        "SELECT id, path, content, restored_at FROM suggestion_backups WHERE suggestion_id = ? ORDER BY id",
+        suggestionId,
+      )
+      .map((r) => ({ id: r.id, path: r.path, content: r.content, restoredAt: r.restored_at }));
+  }
+
+  markRestored(backupId: number, at: Date): void {
+    this.db.run("UPDATE suggestion_backups SET restored_at = ? WHERE id = ?", at.toISOString(), backupId);
   }
 
   /** Corrections with no embedding from `modelId` yet, with their text. */

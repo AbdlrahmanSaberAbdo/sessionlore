@@ -45,6 +45,20 @@ interface SuggestionBase {
   rejectedAt: string | null;
   /** Files written when it was Accepted. */
   installedFiles: string[];
+  /** The existing Skill or Rule it updates; null when it creates something new. */
+  target: Target | null;
+}
+
+/**
+ * An existing Skill or Rule the person owns that a Suggestion updates. A
+ * Skill Target is its `SKILL.md`; a Rule Target is one line of a `CLAUDE.md`.
+ */
+export type Target = { kind: "skill"; path: string; name: string } | { kind: "rule"; path: string; line: string };
+
+/** A plugin skill a companion Skill works alongside. Plugin skills are never Targets. */
+export interface PluginSkillRef {
+  plugin: string;
+  name: string;
 }
 
 export interface SkillSuggestion extends SuggestionBase {
@@ -54,6 +68,8 @@ export interface SkillSuggestion extends SuggestionBase {
   steps: string[];
   /** The Workflow it came from; null once that Workflow no longer exists. */
   workflow: { id: number; name: string } | null;
+  /** Set when a plugin skill already covers part of the Workflow and this Skill complements it. */
+  companionOf: PluginSkillRef | null;
 }
 
 export interface RuleSuggestion extends SuggestionBase {
@@ -101,6 +117,8 @@ export interface PriorSuggestion {
 export type Regeneration =
   | { action: "create" }
   | { action: "replace"; id: number }
+  /** The source grew meaningfully since Suggestion `id` was Accepted: a new one updates what it installed. */
+  | { action: "update"; id: number }
   /** An earlier Suggestion still stands for this source. */
   | { action: "keep"; id: number };
 
@@ -108,10 +126,11 @@ export type Regeneration =
  * Decides whether a source needs a new Suggestion by comparing its current
  * members with the fingerprints of earlier ones, never by Cluster id, so it
  * holds across a re-cluster. An earlier Suggestion is for the same source when
- * at least half its members are still in it. Accepted and Rejected ones always
- * stand (a Rejected Suggestion is not proposed again); a Pending one is
- * replaced only when the source gained meaningfully many members and the
- * person hasn't edited it.
+ * at least half its members are still in it. A Rejected one always stands, so
+ * it is not proposed again. A Pending one is replaced only when the source
+ * gained meaningfully many members and the person hasn't edited it. An
+ * Accepted one is never rewritten; when the source gains meaningfully many
+ * members after it, a new Suggestion updates what it installed.
  */
 export function regeneration(fingerprint: readonly string[], prior: readonly PriorSuggestion[]): Regeneration {
   const current = new Set(fingerprint);
@@ -120,13 +139,21 @@ export function regeneration(fingerprint: readonly string[], prior: readonly Pri
     return kept > 0 && kept * 2 >= p.fingerprint.length;
   });
   if (same.length === 0) return { action: "create" };
-  const settled = same.find((p) => p.state !== "Pending");
-  if (settled) return { action: "keep", id: settled.id };
-  const latest = same.reduce((a, b) => (b.id > a.id ? b : a));
+  const rejected = same.find((p) => p.state === "Rejected");
+  if (rejected) return { action: "keep", id: rejected.id };
   const known = new Set(same.flatMap((p) => p.fingerprint));
   const added = fingerprint.filter((key) => !known.has(key)).length;
-  if (latest.edited || added < meaningfulGrowth(latest.fingerprint.length)) return { action: "keep", id: latest.id };
-  return { action: "replace", id: latest.id };
+  const newest = (ps: readonly PriorSuggestion[]) => ps.reduce((a, b) => (b.id > a.id ? b : a));
+  const pending = same.filter((p) => p.state === "Pending");
+  if (pending.length > 0) {
+    const latest = newest(pending);
+    if (latest.edited || added < meaningfulGrowth(latest.fingerprint.length)) return { action: "keep", id: latest.id };
+    return { action: "replace", id: latest.id };
+  }
+  // Only Accepted ones: never rewritten, but a source that keeps growing earns an update of what was installed.
+  const accepted = newest(same);
+  if (added < meaningfulGrowth(accepted.fingerprint.length)) return { action: "keep", id: accepted.id };
+  return { action: "update", id: accepted.id };
 }
 
 /** New members a source needs before its Pending Suggestion is rewritten: half as many again, and at least 2. */
@@ -141,6 +168,23 @@ export interface RenderContext {
   /** The current content of a file, or null when it doesn't exist. */
   readFile(path: string): string | null;
 }
+
+/** What a Renderer may look at when listing what is installed. */
+export interface InstalledContext extends RenderContext {
+  /** Projects whose own files count, besides the User scope ones. */
+  projects: readonly ProjectRef[];
+  /** Entries of a folder, or [] when it doesn't exist. */
+  listDir(path: string): { name: string; isDirectory: boolean }[];
+}
+
+/**
+ * A Skill or Rule already installed in a Harness, read before suggesting so
+ * nothing is proposed twice. `plugin` is set for a plugin skill, which is
+ * only ever looked at for overlap.
+ */
+export type InstalledItem =
+  | { kind: "skill"; path: string; name: string; description: string; content: string; plugin: string | null }
+  | { kind: "rule"; path: string; line: string };
 
 /** A whole file a Renderer wants written: its absolute path and complete new content. */
 export interface RenderedFile {
@@ -164,4 +208,6 @@ export interface Renderer {
   readonly kind: SuggestionKind;
   /** Throws RenderError when the Suggestion can't be installed. */
   render(suggestion: Suggestion, context: RenderContext): RenderedFile[];
+  /** The installed Skills or Rules of this Renderer's kind and Harness. Reads only. */
+  installed?(context: InstalledContext): InstalledItem[];
 }

@@ -34,14 +34,19 @@ import {
   type WorkflowList,
   type WorkflowSummary,
 } from "./browse.js";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
+import { unifiedDiff } from "./diff.js";
+import { Overlaps, withTarget } from "./targets.js";
 import {
   defaultScope,
   evidenceFingerprint,
   regeneration,
   type Evidence,
+  type InstalledContext,
+  type ProjectRef,
   type Scope,
+  type Target,
   type RenderContext,
   type RenderedFile,
   type Renderer,
@@ -264,6 +269,30 @@ export interface SuggestResult {
 export interface AcceptResult {
   suggestion: Suggestion;
   files: RenderedFile[];
+  /** Files that existed and were backed up before being overwritten; `restore` brings them back. */
+  backups: { path: string }[];
+}
+
+/** One file accepting a Suggestion would write, before and after. */
+export interface FileChange {
+  path: string;
+  /** Its current content; null when it doesn't exist yet. */
+  before: string | null;
+  after: string;
+  /** A unified diff from `before` to `after`; "" when nothing changes. */
+  diff: string;
+}
+
+/** What restoring an Accepted Suggestion's backups put back. */
+export interface RestoreResult {
+  suggestion: Suggestion;
+  /** Paths written back to how they were before accepting. */
+  files: string[];
+}
+
+/** A file's text, or null when it doesn't exist. */
+function readText(path: string): string | null {
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
 /** The Scope the person picks for a Suggestion: User scope, or Project scope by a folder inside the Project. */
@@ -287,6 +316,8 @@ function nextSuggestion(evidence: Evidence[], prior: readonly PriorSuggestionRow
       fingerprint,
       replaces: replaced?.id,
     },
+    /** An Accepted Suggestion whose installed Skill or Rule the new one should target. */
+    updates: decision.action === "update" ? decision.id : undefined,
   };
 }
 
@@ -974,6 +1005,7 @@ export class App {
     const model = this.requireModelProvider().strong;
     const usage = new UsageTally(this.deps.prices);
     const result: SuggestResult = { created: [], replaced: [], failed: [], usage: [] };
+    const overlaps = new Overlaps(this.deps.renderers ?? [], this.installedContext.bind(this), this.deps.embedder);
     const prior = this.store.priorSuggestions("skill");
     for (const workflow of this.listWorkflows().workflows) {
       if (signal?.aborted) break;
@@ -989,16 +1021,31 @@ export class App {
         userMessages: this.store.taskMessages(t.harness, t.session, t.position),
       }));
       try {
-        const { skill, tokens } = await writeSkill(model, { name: workflow.name, tasks }, signal);
+        // An owned Skill that covers the Workflow is its Target; failing that, a plugin skill gets a companion.
+        const skills = (await overlaps.find("skill", workflow.name, evidence, this.acceptedSuggestion(next.updates))).filter((i) => i.kind === "skill");
+        const owned = skills.find((s) => s.plugin === null);
+        const plugin = owned ? undefined : skills.find((s) => s.plugin !== null);
+        const { skill, tokens } = await writeSkill(
+          model,
+          {
+            name: workflow.name,
+            tasks,
+            existing: owned && { name: owned.name, content: owned.content },
+            companionOf: plugin && { name: `${plugin.plugin}:${plugin.name}`, description: plugin.description },
+          },
+          signal,
+        );
         usage.add(model.modelId, tokens);
         if (signal?.aborted) break;
+        const target: Target | null = owned ? { kind: "skill", path: owned.path, name: owned.name } : null;
         const id = this.store.createSuggestion({
           kind: "skill",
           workflow: { id: workflow.id, name: workflow.name },
           title: skill.title,
           trigger: skill.trigger,
           steps: skill.steps,
-          ...next.write,
+          ...withTarget(next.write, target),
+          companionOf: plugin ? { plugin: plugin.plugin!, name: plugin.name } : null,
           createdAt: this.deps.clock.now(),
         });
         result.created.push(id);
@@ -1009,7 +1056,7 @@ export class App {
         result.failed.push({ workflow: workflow.id, error: error instanceof Error ? error.message : String(error) });
       }
     }
-    if (!signal?.aborted) await this.suggestRules(model, usage, result, signal);
+    if (!signal?.aborted) await this.suggestRules(model, usage, result, overlaps, signal);
     result.usage = usage.byModel();
     return result;
   }
@@ -1019,6 +1066,7 @@ export class App {
     model: ModelProvider["strong"],
     usage: UsageTally,
     result: SuggestResult,
+    overlaps: Overlaps,
     signal: AbortSignal | undefined,
   ): Promise<void> {
     const prior = this.store.priorSuggestions("rule");
@@ -1033,9 +1081,15 @@ export class App {
       const next = nextSuggestion(evidence, prior);
       if (!next) continue;
       try {
+        // A line already saying this is the Rule's Target, so accepting replaces it instead of adding a second one.
+        const [line] = (await overlaps.find("rule", cluster.name, evidence, this.acceptedSuggestion(next.updates))).filter((i) => i.kind === "rule");
         const { rule, tokens } = await writeRule(
           model,
-          { name: cluster.name, corrections: cluster.corrections.map((c) => ({ text: c.text, task: c.task })) },
+          {
+            name: cluster.name,
+            corrections: cluster.corrections.map((c) => ({ text: c.text, task: c.task })),
+            existingLine: line?.line,
+          },
           signal,
         );
         usage.add(model.modelId, tokens);
@@ -1045,7 +1099,7 @@ export class App {
           correctionCluster: { id: cluster.id, name: cluster.name },
           title: rule.title,
           rule: rule.rule,
-          ...next.write,
+          ...withTarget(next.write, line ? { kind: "rule", path: line.path, line: line.line } : null),
           createdAt: this.deps.clock.now(),
         });
         result.created.push(id);
@@ -1072,16 +1126,63 @@ export class App {
     return this.render(this.pendingSuggestion(id));
   }
 
-  /** Renders a Pending Suggestion, writes its files and marks it Accepted. */
+  /**
+   * What accepting a Pending Suggestion would change in each file, as a
+   * unified diff against its current content. Pure, like `previewSuggestion`.
+   */
+  suggestionChanges(id: number): FileChange[] {
+    return this.render(this.pendingSuggestion(id)).map((file) => {
+      const before = readText(file.path);
+      return { path: file.path, before, after: file.content, diff: unifiedDiff(file.path, before, file.content) };
+    });
+  }
+
+  /**
+   * Renders a Pending Suggestion, writes its files and marks it Accepted. A
+   * file that already exists, such as a Target, is backed up first so
+   * `restoreSuggestion` can bring it back.
+   */
   acceptSuggestion(id: number): AcceptResult {
     const suggestion = this.pendingSuggestion(id);
     const files = this.render(suggestion);
+    const now = this.deps.clock.now();
+    const backups: AcceptResult["backups"] = [];
+    for (const file of files) {
+      const before = readText(file.path);
+      if (before === null || before === file.content) continue;
+      this.store.addBackup(id, file.path, before, now);
+      backups.push({ path: file.path });
+    }
     for (const file of files) {
       mkdirSync(dirname(file.path), { recursive: true });
       writeFileSync(file.path, file.content);
     }
-    this.store.markAccepted(id, this.deps.clock.now(), files.map((f) => f.path));
-    return { suggestion: this.store.getSuggestion(id)!, files };
+    this.store.markAccepted(id, now, files.map((f) => f.path));
+    return { suggestion: this.store.getSuggestion(id)!, files, backups };
+  }
+
+  /** Puts back the files an Accepted Suggestion overwrote, as they were just before it was accepted. */
+  restoreSuggestion(id: number): RestoreResult {
+    const suggestion = this.store.getSuggestion(id);
+    if (!suggestion) throw new SuggestionStateError(`No Suggestion has id ${id}.`);
+    if (suggestion.state !== "Accepted") {
+      throw new SuggestionStateError(`Suggestion ${id} is ${suggestion.state}; only an Accepted Suggestion can be restored.`);
+    }
+    const backups = this.store.backups(id);
+    if (backups.length === 0) throw new SuggestionStateError(`Suggestion ${id} changed no existing file, so there is nothing to restore.`);
+    if (backups.every((b) => b.restoredAt !== null)) {
+      throw new SuggestionStateError(`Suggestion ${id} was already restored.`);
+    }
+    const now = this.deps.clock.now();
+    const files: string[] = [];
+    for (const backup of backups) {
+      if (backup.restoredAt !== null) continue;
+      mkdirSync(dirname(backup.path), { recursive: true });
+      writeFileSync(backup.path, backup.content);
+      this.store.markRestored(backup.id, now);
+      files.push(backup.path);
+    }
+    return { suggestion, files };
   }
 
   /**
@@ -1149,11 +1250,28 @@ export class App {
   private render(suggestion: Suggestion): RenderedFile[] {
     const renderers = (this.deps.renderers ?? []).filter((r) => r.kind === suggestion.kind);
     if (renderers.length === 0) throw new Error(`No Renderer is available for ${suggestion.kind} Suggestions.`);
-    const context: RenderContext = {
-      homeDir: this.deps.harnessContext.homeDir,
-      readFile: (path) => (existsSync(path) ? readFileSync(path, "utf8") : null),
-    };
+    const context: RenderContext = { homeDir: this.deps.harnessContext.homeDir, readFile: readText };
     return renderers.flatMap((r) => r.render(suggestion, context));
+  }
+
+  private acceptedSuggestion(id: number | undefined): Suggestion | undefined {
+    return id === undefined ? undefined : (this.store.getSuggestion(id) ?? undefined);
+  }
+
+  /** What Renderers read to list installed Skills and Rules: the User scope ones and those of `projects`. */
+  private installedContext(projects: readonly ProjectRef[]): InstalledContext {
+    return {
+      homeDir: this.deps.harnessContext.homeDir,
+      projects,
+      readFile: readText,
+      listDir: (path) => {
+        try {
+          return readdirSync(path, { withFileTypes: true }).map((e) => ({ name: e.name, isDirectory: e.isDirectory() }));
+        } catch {
+          return [];
+        }
+      },
+    };
   }
 
   /** The redacted text Analysis would send for a Session, or null if no Session has that id. */

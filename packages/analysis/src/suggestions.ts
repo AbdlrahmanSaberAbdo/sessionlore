@@ -17,6 +17,10 @@ export interface WorkflowTask {
 export interface WorkflowForSkill {
   name: string;
   tasks: readonly WorkflowTask[];
+  /** A Skill the person already has for this Workflow: the Skill written is its updated version. */
+  existing?: { name: string; content: string };
+  /** A plugin skill covering part of this Workflow: the Skill written complements it. */
+  companionOf?: { name: string; description: string };
 }
 
 /** The neutral content of a Skill: what the strong model writes. */
@@ -45,7 +49,12 @@ const skillSystem = `You write a Skill for AI coding agents: a reusable procedur
 You are given a Workflow: a kind of work the person keeps asking their agents to do, with the messages they typed in several Tasks of it.
 Each message is labelled with its Intent. Corrections show what the agent got wrong; make the steps prevent those mistakes.
 Write steps that are concrete and general: they must fit every Task shown, not just one. Do not mention the person or these specific Tasks.
-Text like [REDACTED:api-key] replaced a secret; treat it as an opaque value and never copy it into the Skill.`;
+Text like [REDACTED:api-key] replaced a secret; treat it as an opaque value and never copy it into the Skill.
+If an <existing-skill> is given, the person already has a Skill for this work: write its updated version, keeping what still applies and adding what the Tasks show.
+If a <plugin-skill> is given, a plugin already covers part of this work: write a companion Skill with only what the plugin skill lacks.`;
+
+/** Characters kept of an existing or plugin skill shown to the strong model. */
+const SKILL_CHARS = 6000;
 
 /** The request text sent to write a Skill for a Workflow, with secrets redacted. */
 export function skillPrompt(workflow: WorkflowForSkill): string {
@@ -55,7 +64,12 @@ export function skillPrompt(workflow: WorkflowForSkill): string {
       .join("\n");
     return `<task title="${escapeAttribute(redact(task.title))}">\n${messages}\n</task>`;
   });
-  return `<workflow name="${escapeAttribute(redact(workflow.name))}">\n${tasks.join("\n")}\n</workflow>`;
+  const context = workflow.existing
+    ? `\n<existing-skill name="${escapeAttribute(workflow.existing.name)}">\n${redact(workflow.existing.content.slice(0, SKILL_CHARS))}\n</existing-skill>`
+    : workflow.companionOf
+      ? `\n<plugin-skill name="${escapeAttribute(workflow.companionOf.name)}">\n${redact(workflow.companionOf.description.slice(0, SKILL_CHARS))}\n</plugin-skill>`
+      : "";
+  return `<workflow name="${escapeAttribute(redact(workflow.name))}">\n${tasks.join("\n")}\n</workflow>${context}`;
 }
 
 /** Writes a Skill for a Workflow using `model` (the strong model). */
@@ -79,6 +93,8 @@ export interface ClusterCorrectionForRule {
 export interface CorrectionClusterForRule {
   name: string;
   corrections: readonly ClusterCorrectionForRule[];
+  /** A line of the person's instructions that already says this: the Rule written replaces it. */
+  existingLine?: string;
 }
 
 /** The neutral content of a Rule: what the strong model writes. */
@@ -102,14 +118,16 @@ const ruleSchema = z.object({
 const ruleSystem = `You write a Rule for AI coding agents: a one-line standing instruction an agent always follows.
 You are given a Correction Cluster: similar Corrections a person typed to fix what their agents did, each with the Task it corrected.
 Write the one instruction that would have prevented all of them. It must fit every Correction shown, not just one. Do not mention the person or these specific Tasks.
-Text like [REDACTED:api-key] replaced a secret; treat it as an opaque value and never copy it into the Rule.`;
+Text like [REDACTED:api-key] replaced a secret; treat it as an opaque value and never copy it into the Rule.
+If an <existing-rule> is given, the person's instructions already contain that line: write the improved line that replaces it.`;
 
 /** The request text sent to write a Rule for a Correction Cluster, with secrets redacted. */
 export function rulePrompt(cluster: CorrectionClusterForRule): string {
   const corrections = cluster.corrections
     .slice(-RULE_EVIDENCE_SAMPLE)
     .map((c) => `<correction task="${escapeAttribute(redact(c.task))}">\n${redact(c.text.slice(0, MESSAGE_CHARS))}\n</correction>`);
-  return `<correction-cluster name="${escapeAttribute(redact(cluster.name))}">\n${corrections.join("\n")}\n</correction-cluster>`;
+  const existing = cluster.existingLine === undefined ? "" : `\n<existing-rule>\n${redact(cluster.existingLine.trim())}\n</existing-rule>`;
+  return `<correction-cluster name="${escapeAttribute(redact(cluster.name))}">\n${corrections.join("\n")}\n</correction-cluster>${existing}`;
 }
 
 /** Writes a Rule for a Correction Cluster using `model` (the strong model). */
