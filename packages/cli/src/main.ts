@@ -27,6 +27,7 @@ import { resolveModelProvider, type ModelProviderResolution } from "./model-prov
 import { openDemo } from "./demo.js";
 import { openInEditor } from "./editor.js";
 import { unsupportedNodeMessage } from "./node-version.js";
+import { parseSince, sinceHelp } from "./since.js";
 
 /** Everything the CLI takes from its surroundings. Seam 1 tests supply all of it. */
 export interface CliEnvironment {
@@ -84,6 +85,8 @@ interface CommandContext {
   last?: number;
   /** `--harness`: limit a Scan to these Harnesses. */
   harnesses?: HarnessId[];
+  /** `--since`: limit a Scan to Sessions active from this moment on. */
+  since?: Date;
   serve: { port: number; open: boolean; openBrowser?: (url: string) => void; uiDir?: string };
   out(text: string): void;
   err(text: string): void;
@@ -164,8 +167,8 @@ const commands: Record<string, Command> = {
   },
   scan: {
     summary: "Read Sessions from every Harness on this machine into the local store",
-    async run({ app, json, last, harnesses, out, warn }) {
-      const result = await app.scan({ last, harnesses });
+    async run({ app, json, last, harnesses, since, out, warn }) {
+      const result = await app.scan({ last, harnesses, since });
       for (const warning of result.harnesses.flatMap((h) => h.warnings)) warn(`Warning: ${warning}\n`);
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       for (const harness of result.harnesses) {
@@ -621,6 +624,7 @@ function usage(): string {
     `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\n` +
     `Options:\n  --json                     Machine-readable output\n` +
     `  --last N                   scan: read only the N most recent Sessions\n` +
+    `  --since <window>           scan, run: read only Sessions active within 30d, 2w, or since a date (2026-09-01)\n` +
     `  --harness <id>             scan: read only claude-code or cursor (repeat, or separate with commas)\n` +
     `  --yes, -y                  analyze, suggest, recluster: skip the cost estimate confirmation\n` +
     `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n` +
@@ -681,6 +685,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
         help: { type: "boolean", short: "h" },
         "show-redacted": { type: "string" },
         last: { type: "string" },
+        since: { type: "string" },
         harness: { type: "string", multiple: true },
         export: { type: "boolean", default: false },
         anonymize: { type: "boolean", default: false },
@@ -714,6 +719,15 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     last = wholeNumber(parsed.values.last) ?? 0;
     if (last < 1) {
       io.stderr(`--last takes a positive whole number of Sessions, not "${parsed.values.last}"\n\n${usage()}`);
+      return 2;
+    }
+  }
+
+  let since: Date | undefined;
+  if (parsed.values.since !== undefined) {
+    since = parseSince(parsed.values.since, io.clock.now()) ?? undefined;
+    if (!since) {
+      io.stderr(`--since takes ${sinceHelp}, not "${parsed.values.since}"\n\n${usage()}`);
       return 2;
     }
   }
@@ -779,6 +793,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       configFile: configPath(io.homeDir),
       last,
       harnesses,
+      since,
       editFile: io.editFile ?? ((path) => openInEditor(path, io.env)),
       dataDir: dataDir(io.homeDir),
       serve,

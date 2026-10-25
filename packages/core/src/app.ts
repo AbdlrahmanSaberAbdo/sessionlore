@@ -239,6 +239,8 @@ export interface ScanOptions {
   last?: number;
   /** Read only these Harnesses; every Harness when omitted. */
   harnesses?: readonly HarnessId[];
+  /** Read only Sessions with activity at or after this moment; applied before `last`. */
+  since?: Date;
 }
 
 export interface ScanResult {
@@ -484,7 +486,10 @@ export class App {
       const warned: string[] = [];
       warnings.set(adapter, warned);
       for (const storage of storages) {
-        for await (const source of adapter.listSessions(storage, (text) => warned.push(text))) found.push({ adapter, source });
+        for await (const source of adapter.listSessions(storage, (text) => warned.push(text))) {
+          if (options.since && source.lastActivityAt < options.since) continue;
+          found.push({ adapter, source });
+        }
       }
     }
     const selected =
