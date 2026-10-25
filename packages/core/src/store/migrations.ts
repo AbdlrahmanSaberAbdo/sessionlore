@@ -268,6 +268,31 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE sessions ADD COLUMN content_fingerprint TEXT;
     `,
   },
+  {
+    version: 14,
+    name: "cluster anchors",
+    sql: `
+      -- The embedding of a Task (or Correction) that re-analyzing its Session removed, kept for its Cluster until
+      -- clustering has placed the Session's new Tasks (ADR 0008). Similar new Tasks rejoin the Cluster through it,
+      -- and a Cluster none rejoin is folded into the one its Sessions' new Tasks went to, so it keeps its Suggestions.
+      CREATE TABLE cluster_anchors (
+        id               INTEGER PRIMARY KEY,
+        cluster_id       INTEGER NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+        session_id       INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        embedding        BLOB NOT NULL,
+        embedding_model  TEXT NOT NULL
+      );
+      CREATE INDEX cluster_anchors_cluster ON cluster_anchors (cluster_id);
+      CREATE TABLE correction_cluster_anchors (
+        id               INTEGER PRIMARY KEY,
+        cluster_id       INTEGER NOT NULL REFERENCES correction_clusters(id) ON DELETE CASCADE,
+        session_id       INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        embedding        BLOB NOT NULL,
+        embedding_model  TEXT NOT NULL
+      );
+      CREATE INDEX correction_cluster_anchors_cluster ON correction_cluster_anchors (cluster_id);
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

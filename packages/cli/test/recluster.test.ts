@@ -97,6 +97,105 @@ describe("Lasting Workflows", () => {
     expect(workflow.tasks.map((t: any) => t.title)).not.toContain("update the release notes");
     expect(workflow.tasks).toHaveLength(3);
   });
+
+  /** Rewrites a Session with one more User Message, so the next Analysis analyzes it again. */
+  function extend(written: { id: string }, startedAt: string, requests: string[], extra: string) {
+    writeClaudeSession(home, {
+      id: written.id,
+      cwd: home.gitRepo("code/shop"),
+      startedAt,
+      turns: [...requests, extra].flatMap((r) => [turn.user(r), turn.assistant("Done.")]),
+    });
+  }
+
+  it("keeps a Workflow's id, name and Suggestions when every one of its Sessions is analyzed again", async () => {
+    const specs: [string, string[]][] = [
+      ["2026-05-10T09:00:00.000Z", ["write a database migration for orders"]],
+      ["2026-05-20T09:00:00.000Z", ["add a database migration for users", "database migration for the cart table"]],
+    ];
+    const written = specs.map(([at, requests]) => session(at, ...requests));
+    const skill = { title: "Write a migration", trigger: "Use when changing a table.", steps: ["Write it.", "Run it."] };
+    const provider = (name: string) =>
+      scriptedModelProvider((request) => (request.includes("<workflow") ? skill : oneTaskPerMessageReply(request, () => name)));
+    const options = { modelProvider: provider("Write database migrations").modelProvider, embedder: topicEmbedder(["database migration"]), clock: now };
+    await analyze(options);
+    const [before] = (await workflows(options)).workflows;
+    expect((await runCli(home, ["suggest", "--json", "--yes"], options)).json().created).toHaveLength(1);
+
+    specs.forEach(([at, requests], i) => extend(written[i]!, at, requests, `thanks ${i}`));
+    const again = { ...options, modelProvider: provider("A different name").modelProvider };
+    await analyze(again);
+
+    const after = (await workflows(again)).workflows;
+    expect(after.map((w: any) => [w.id, w.name, w.tasks.length])).toEqual([[before.id, "Write database migrations", 3]]);
+    const [suggestion] = (await runCli(home, ["review", "--json"])).json().suggestions;
+    expect(suggestion.workflow).toEqual({ id: before.id, name: "Write database migrations" });
+    expect((await runCli(home, ["workflow", String(before.id), "--json"])).json().workflow.id).toBe(before.id);
+  });
+
+  it("moves a Workflow's Suggestions to where its Tasks went when re-analysis puts them in a different Cluster", async () => {
+    const specs: [string, string[]][] = [
+      ["2026-05-10T09:00:00.000Z", ["write a database migration for orders"]],
+      ["2026-05-20T09:00:00.000Z", ["add a database migration for users", "database migration for the cart table"]],
+    ];
+    const written = specs.map(([at, requests]) => session(at, ...requests));
+    const skill = { title: "Write a migration", trigger: "Use when changing a table.", steps: ["Write it.", "Run it."] };
+    const modelProvider = scriptedModelProvider((request) =>
+      request.includes("<workflow") ? skill : oneTaskPerMessageReply(request, (r) => (r.includes("schema") ? "Change schemas" : "Write database migrations")),
+    ).modelProvider;
+    const options = { modelProvider, embedder: topicEmbedder(["database migration", "schema change"]), clock: now };
+    await analyze(options);
+    const [before] = (await workflows(options)).workflows;
+    expect((await runCli(home, ["suggest", "--json", "--yes"], options)).exitCode).toBe(0);
+
+    // The person reworded every Task, so re-analysis finds Tasks unlike the Workflow's old ones.
+    const reworded = specs.map(([at, requests]) => [at, requests.map((r) => r.replace("database migration", "schema change"))] as const);
+    reworded.forEach(([at, requests], i) => extend(written[i]!, at, [...requests], `thanks ${i}`));
+    await analyze(options);
+
+    const [after] = (await workflows(options)).workflows;
+    expect(after.id).not.toBe(before.id);
+    const [suggestion] = (await runCli(home, ["review", "--json"])).json().suggestions;
+    expect(suggestion.workflow.id).toBe(after.id);
+    expect((await runCli(home, ["workflow", String(before.id), "--json"])).json().workflow.id).toBe(after.id);
+  });
+
+  it("keeps a Correction Cluster's id, name and Rule Suggestion when its Sessions are analyzed again", async () => {
+    const specs: [string, string[]][] = [
+      ["2026-05-10T09:00:00.000Z", ["write a database migration", "no, use pnpm here"]],
+      ["2026-05-20T09:00:00.000Z", ["add a database migration", "no, pnpm please"]],
+      ["2026-05-25T09:00:00.000Z", ["database migration for carts", "no, run it with pnpm"]],
+    ];
+    const written = specs.map(([at, requests]) => session(at, ...requests));
+    const rule = { title: "Use pnpm", rule: "Use pnpm, never npm." };
+    const provider = (name: string) =>
+      scriptedModelProvider((request) => {
+        if (request.includes("<correction-cluster")) return rule;
+        const messages = [...request.matchAll(/<message index=\\"(\d+)\\">\\n([\s\S]*?)\\n<\/message>/g)];
+        if (messages.length === 0) return { name };
+        return {
+          tasks: [
+            {
+              title: messages[0]![2],
+              messages: messages.map(([, index, text]) => ({ index: Number(index), intent: text!.startsWith("no,") ? "Correction" : "New Task" })),
+            },
+          ],
+        };
+      });
+    const options = { modelProvider: provider("Use pnpm").modelProvider, embedder: topicEmbedder(["database migration", "pnpm"]), clock: now };
+    await analyze(options);
+    const [before] = (await runCli(home, ["corrections", "--json"])).json().correctionClusters;
+    expect(before.name).toBe("Use pnpm");
+    expect((await runCli(home, ["suggest", "--json", "--yes"], options)).exitCode).toBe(0);
+
+    specs.forEach(([at, requests], i) => extend(written[i]!, at, requests, `ok ${i}`));
+    await analyze({ ...options, modelProvider: provider("Another name").modelProvider });
+
+    const after = (await runCli(home, ["corrections", "--json"])).json().correctionClusters;
+    expect(after.map((c: any) => [c.id, c.name, c.corrections.length])).toEqual([[before.id, "Use pnpm", 3]]);
+    const suggestions = (await runCli(home, ["review", "--json"])).json().suggestions;
+    expect(suggestions.find((s: any) => s.kind === "rule").correctionCluster).toEqual({ id: before.id, name: "Use pnpm" });
+  });
 });
 
 /** Two sets of migration Tasks that one Embedder tells apart and another groups together. */

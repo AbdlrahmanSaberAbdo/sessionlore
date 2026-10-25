@@ -554,13 +554,18 @@ export class App {
     usage: UsageTally,
     signal: AbortSignal | undefined,
   ): Promise<void> {
+    await this.placeNewTasks(embedder);
+    await this.nameClusters(model, usage, signal);
+  }
+
+  /** Embeds Tasks not embedded yet and puts each unclustered one into the most similar Cluster or a new one. */
+  private async placeNewTasks(embedder: Embedder): Promise<void> {
     await this.embedTasks(embedder);
     const placements = placeTasks(
       this.store.clusterVectors(embedder.modelId),
       this.store.unclusteredTasks(embedder.modelId).map((t) => ({ task: t.key, vector: t.vector })),
     );
     this.store.placeTasks(placements, this.deps.clock.now());
-    await this.nameClusters(model, usage, signal);
   }
 
   /** Embeds every Task not yet embedded with `embedder`'s model. */
@@ -604,10 +609,11 @@ export class App {
     const workflowNames = () => new Map(this.store.listClusters().map((c) => [c.id, c.name ?? c.tasks[0]!.title]));
     const correctionNames = () =>
       new Map(this.store.listCorrectionClusters().map((c) => [c.id, c.name ?? c.corrections[0]!.text]));
+    // Tasks a re-analysis left unclustered first rejoin their Clusters as an Analysis would, so the mapping starts from where they were.
+    await this.placeNewTasks(embedder);
+    await this.placeNewCorrections(embedder);
     const workflowsBefore = workflowNames();
     const correctionsBefore = correctionNames();
-    await this.embedTasks(embedder);
-    await this.embedCorrections(embedder);
     const workflows = this.regroup("tasks", this.store.embeddedTasks(embedder.modelId));
     const corrections = this.regroup("corrections", this.store.embeddedCorrections(embedder.modelId));
 
@@ -665,13 +671,18 @@ export class App {
     usage: UsageTally,
     signal: AbortSignal | undefined,
   ): Promise<void> {
+    await this.placeNewCorrections(embedder);
+    await this.nameCorrectionClusters(model, usage, signal);
+  }
+
+  /** Embeds Corrections not embedded yet and puts each unclustered one into the most similar Correction Cluster or a new one. */
+  private async placeNewCorrections(embedder: Embedder): Promise<void> {
     await this.embedCorrections(embedder);
     const placements = placeTasks(
       this.store.correctionClusterVectors(embedder.modelId),
       this.store.unclusteredCorrections(embedder.modelId).map((c) => ({ task: c.key, vector: c.vector })),
     );
     this.store.placeCorrections(placements, this.deps.clock.now());
-    await this.nameCorrectionClusters(model, usage, signal);
   }
 
   /** Embeds every Correction not yet embedded with `embedder`'s model. */
