@@ -98,13 +98,28 @@ describe("scan of Claude Code Sessions", () => {
     writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-02T09:00:00.000Z", turns: [turn.user("two")] });
 
     const first = await runCli(home, ["scan"]);
-    expect(first.stdout).toContain("Claude Code: 2 Sessions added");
+    expect(first.stdout).toContain("Reading all your Sessions (read-only)\n");
+    expect(first.stdout).toMatch(/^ {2}Claude Code +~\/\.claude\/projects +2 Sessions, 2 new$/m);
 
     writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-03T09:00:00.000Z", turns: [turn.user("three")] });
     const second = await runCli(home, ["scan", "--json"]);
     expect(second.json()).toEqual({
-      harnesses: [{ harness: "claude-code", name: "Claude Code", added: 1, updated: 0, unchanged: 2, warnings: [] }],
+      harnesses: [{ harness: "claude-code", name: "Claude Code", locations: [claudeProjectsDir(home)], added: 1, updated: 0, unchanged: 2, warnings: [] }],
     });
+  });
+
+  it("names the limits it read within: --since, --last and --harness", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("one")] });
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-02T09:00:00.000Z", turns: [turn.user("two")] });
+
+    const dated = await runCli(home, ["scan", "--since", "2026-04-01", "--last", "1", "--harness", "claude-code"]);
+    const relative = await runCli(home, ["scan", "--since", "6w"]);
+
+    expect(dated.stdout).toContain("Reading the most recent of your Claude Code Sessions active since 2026-04-01 (read-only)\n");
+    expect(dated.stdout).toMatch(/^ {2}Claude Code +~\/\.claude\/projects +1 Session, 1 new$/m);
+    expect(relative.stdout).toContain("Reading your Sessions from the last 6 weeks (read-only)\n");
+    expect(relative.stdout).toMatch(/^ {2}Claude Code +~\/\.claude\/projects +2 Sessions, 1 new$/m);
   });
 
   it("says so when no supported Harness has data on this machine", async () => {

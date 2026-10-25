@@ -60,7 +60,7 @@ describe("reliable Analysis", () => {
     expect(first.exitCode).not.toBe(0);
     expect(first.stdout).toContain("Interrupted");
     expect(first.stdout).toContain("1 Session analyzed");
-    expect(first.stdout).toMatch(/Used: mock-cheap: 20 input and 40 output tokens/);
+    expect(first.stdout).toMatch(/^ {2}mock-cheap +20 input \+ 40 output tokens +cost unknown$/m);
     expect(provider.requests()).toHaveLength(2);
 
     const second = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
@@ -85,9 +85,10 @@ describe("analyze cost report", () => {
     const analyze = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
 
     expect(analyze.exitCode).toBe(0);
-    expect(analyze.stdout).toMatch(/mock-cheap: about [\d,]+ input and [\d,]+ output tokens, about \$\d+\.\d\d/);
+    expect(analyze.stdout).toMatch(/^ {2}mock-cheap +about [\d,]+ input \+ [\d,]+ output tokens +about \$\d+\.\d\d$/m);
     // (20 × $1000 + 40 × $2000) / 1,000,000 = $0.10
-    expect(analyze.stdout).toContain("Used: mock-cheap: 20 input and 40 output tokens, $0.10");
+    expect(analyze.stdout).toContain("Cost: $0.10\n");
+    expect(analyze.stdout).toMatch(/^ {2}mock-cheap +20 input \+ 40 output tokens +\$0\.10$/m);
   });
 
   it.each([
@@ -129,7 +130,8 @@ describe("analyze cost report", () => {
     const analyze = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
 
     expect(analyze.stdout).toContain("cost unknown");
-    expect(analyze.stdout).toContain("Used: mock-cheap: 10 input and 20 output tokens, cost unknown");
+    expect(analyze.stdout).toContain("Cost: unknown\n");
+    expect(analyze.stdout).toMatch(/^ {2}mock-cheap +10 input \+ 20 output tokens +cost unknown$/m);
     expect(analyze.stdout).toContain('"prices"');
   });
 
@@ -162,8 +164,8 @@ describe("analyze cost estimate", () => {
 
     const analyze = await runCli(home, ["analyze"], { modelProvider: provider.modelProvider, answers: ["n"] });
 
-    expect(analyze.stdout).toContain("2 Sessions to analyze");
-    expect(analyze.stdout).toMatch(/mock-cheap: about [\d,]+ input and [\d,]+ output tokens/);
+    expect(analyze.stdout).toContain("Analysis: 2 new or changed Sessions\n");
+    expect(analyze.stdout).toMatch(/^ {2}mock-cheap +about [\d,]+ input \+ [\d,]+ output tokens/m);
     expect(analyze.stdout).toContain("Continue?");
     expect(analyze.stdout).toContain("Nothing analyzed");
     expect(analyze.exitCode).toBe(0);

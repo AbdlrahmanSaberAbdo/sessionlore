@@ -504,8 +504,8 @@ describe("the cost of suggest", () => {
     const result = await runCli(home, ["suggest"], { ...opts, answers: ["n"] });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("1 Suggestion to write");
-    expect(result.stdout).toMatch(/mock-strong: about [\d,]+ input and [\d,]+ output tokens/);
+    expect(result.stdout).toContain("Suggestions: 1 to write\n");
+    expect(result.stdout).toMatch(/^ {2}mock-strong +about [\d,]+ input \+ [\d,]+ output tokens/m);
     expect(result.stdout).toContain("Nothing written");
     expect(strongRequests(opts)).toHaveLength(0);
     expect(await review()).toEqual([]);
@@ -520,7 +520,7 @@ describe("the cost of suggest", () => {
 
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toContain("1 Suggestion written");
-    expect(result.stdout).toMatch(/Used: mock-strong: 10 input and 20 output tokens/);
+    expect(result.stdout).toMatch(/^ {2}mock-strong +10 input \+ 20 output tokens/m);
     expect(strongRequests(opts)).toHaveLength(1);
   });
 
@@ -555,7 +555,7 @@ describe("the cost of analyze", () => {
     workflowInOneProject();
     const estimate = async (opts: RunOptions) => {
       const result = await runCli(home, ["analyze"], { ...opts, answers: ["n"] });
-      const [, input] = /mock-cheap: about ([\d,]+) input/.exec(result.stdout)!;
+      const [, input] = /mock-cheap +about ([\d,]+) input/.exec(result.stdout)!;
       return Number(input!.replace(/,/g, ""));
     };
     expect((await runCli(home, ["scan"])).exitCode).toBe(0);
@@ -582,7 +582,7 @@ describe("the cost of recluster", () => {
     const noTerminal = await runCli(home, ["recluster"], together);
 
     expect(declined.exitCode).toBe(0);
-    expect(declined.stdout).toMatch(/mock-cheap: about [\d,]+ input/);
+    expect(declined.stdout).toMatch(/mock-cheap +about [\d,]+ input/);
     expect(declined.stdout).toContain("Nothing re-clustered");
     expect(noTerminal.exitCode).toBe(1);
     expect(noTerminal.stderr).toContain("sessionlore recluster --yes");

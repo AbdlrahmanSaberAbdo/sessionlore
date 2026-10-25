@@ -183,7 +183,7 @@ describe("scan of Cursor Sessions", () => {
     writeCursorDatabase(home, [composers[0]!, { ...composers[1]!, bubbles: [bubble.user("two"), bubble.user("and more")] }]);
     const third = (await runCli(home, ["scan", "--json"])).json();
 
-    const cursor = { harness: "cursor", name: "Cursor", warnings: [] };
+    const cursor = { harness: "cursor", name: "Cursor", locations: [expect.stringMatching(/state\.vscdb$/)], warnings: [] };
     expect(first.harnesses).toEqual([{ ...cursor, added: 2, updated: 0, unchanged: 0 }]);
     expect(second.harnesses).toEqual([{ ...cursor, added: 0, updated: 0, unchanged: 2 }]);
     expect(third.harnesses).toEqual([{ ...cursor, added: 0, updated: 1, unchanged: 1 }]);

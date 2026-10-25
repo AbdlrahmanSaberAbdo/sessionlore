@@ -224,6 +224,8 @@ export interface ClusterRef {
 export interface HarnessScanResult {
   harness: HarnessId;
   name: string;
+  /** Where the Harness's Sessions were read from on this machine, as its Adapter found them. */
+  locations: string[];
   /** Sessions new to the store. */
   added: number;
   /** Stored Sessions whose content changed since they were last read. */
@@ -394,6 +396,8 @@ export class SuggestionStateError extends Error {
 export interface AnalysisEstimate {
   /** Number of new or changed Sessions. */
   sessions: number;
+  /** Stored Sessions already analyzed as they are now, which the Analysis skips. */
+  alreadyAnalyzed: number;
   /** Includes naming the Clusters the Analysis may form, counted as an upper bound. */
   models: ModelUsage[];
 }
@@ -495,12 +499,14 @@ export class App {
     const counts = new Map<Adapter, { added: number; updated: number; unchanged: number }>();
     const unrecognized = new Map<Adapter, Map<string, number>>();
     const warnings = new Map<Adapter, string[]>();
+    const locations = new Map<Adapter, string[]>();
     const found: { adapter: Adapter; source: SessionSource }[] = [];
     const adapters = this.deps.adapters.filter((a) => !options.harnesses || options.harnesses.includes(a.harness));
     for (const adapter of adapters) {
       const storages = await adapter.discover(this.deps.harnessContext);
       if (storages.length === 0) continue; // this Harness has no data on this machine
       counts.set(adapter, { added: 0, updated: 0, unchanged: 0 });
+      locations.set(adapter, storages);
       unrecognized.set(adapter, new Map());
       const warned: string[] = [];
       warnings.set(adapter, warned);
@@ -547,6 +553,7 @@ export class App {
       harnesses: [...counts].map(([adapter, count]) => ({
         harness: adapter.harness,
         name: adapter.displayName,
+        locations: locations.get(adapter)!,
         ...count,
         warnings: [...warnings.get(adapter)!, ...unrecognizedWarnings(adapter, unrecognized.get(adapter)!)],
       })),
@@ -591,7 +598,8 @@ export class App {
         usage.add(model, estimateCorrectionClusterName(typical.slice(i * showable, (i + 1) * showable)));
       }
     }
-    return { sessions: sessions.length, models: usage.byModel() };
+    const alreadyAnalyzed = this.store.analyzedSessionProjects().filter((p) => this.projectFilter.allows(p)).length;
+    return { sessions: sessions.length, alreadyAnalyzed, models: usage.byModel() };
   }
 
   /** A Cluster can only be listed once it has this many members, so smaller ones need no name yet. */
