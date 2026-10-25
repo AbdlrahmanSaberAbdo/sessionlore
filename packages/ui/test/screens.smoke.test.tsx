@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { FilterOptions, Overview, SessionList, SessionView, WorkflowDetail, WorkflowList } from "@sessionlore/core";
+import type { FilterOptions, MindMap, Overview, SessionList, SessionView, WorkflowDetail, WorkflowList } from "@sessionlore/core";
+import { MindMapScreen } from "../src/screens/mind-map.js";
 import { OverviewScreen } from "../src/screens/overview.js";
 import { SessionScreen, SessionsScreen } from "../src/screens/sessions.js";
 import { WorkflowScreen, WorkflowsScreen } from "../src/screens/workflows.js";
@@ -112,6 +113,70 @@ const sessionView: SessionView = {
 
 const sessions: SessionList = { sessions: [sessionView], filters };
 
+const mindMap: MindMap = {
+  nodes: [
+    { id: "project:/code/shop", kind: "project", label: "shop", path: "/code/shop", harnesses: ["claude-code", "cursor"] },
+    {
+      id: "workflow:4",
+      kind: "workflow",
+      label: "Write database migrations",
+      harnesses: ["claude-code", "cursor"],
+      workflow: 4,
+      tasks: 2,
+      sessions: 2,
+      correctionsPerTask: 0.5,
+    },
+    {
+      id: "task:claude-code:sess-1:0",
+      kind: "task",
+      label: "write a migration for orders",
+      harnesses: ["claude-code"],
+      session: "sess-1",
+      position: 0,
+      at: "2026-05-04T09:00:00.000Z",
+      corrections: 1,
+    },
+    {
+      id: "task:cursor:sess-2:0",
+      kind: "task",
+      label: "migration for the cart table",
+      harnesses: ["cursor"],
+      session: "sess-2",
+      position: 0,
+      at: "2026-05-26T09:00:00.000Z",
+      corrections: 0,
+    },
+    {
+      id: "session:claude-code:sess-1",
+      kind: "session",
+      label: "shop · 2026-05-04",
+      harnesses: ["claude-code"],
+      session: "sess-1",
+      project: { name: "shop", path: "/code/shop" },
+      startedAt: "2026-05-04T09:00:00.000Z",
+    },
+    {
+      id: "session:cursor:sess-2",
+      kind: "session",
+      label: "shop · 2026-05-26",
+      harnesses: ["cursor"],
+      session: "sess-2",
+      project: { name: "shop", path: "/code/shop" },
+      startedAt: "2026-05-26T09:00:00.000Z",
+    },
+    { id: "suggestion:2", kind: "suggestion", label: "Write a database migration", harnesses: ["claude-code", "cursor"], suggestion: 2, state: "Pending" },
+  ],
+  edges: [
+    { id: "e1", source: "project:/code/shop", target: "workflow:4" },
+    { id: "e2", source: "workflow:4", target: "task:claude-code:sess-1:0" },
+    { id: "e3", source: "workflow:4", target: "task:cursor:sess-2:0" },
+    { id: "e4", source: "task:claude-code:sess-1:0", target: "session:claude-code:sess-1" },
+    { id: "e5", source: "task:cursor:sess-2:0", target: "session:cursor:sess-2" },
+    { id: "e6", source: "workflow:4", target: "suggestion:2" },
+  ],
+  filters,
+};
+
 describe("UI screens", () => {
   it("Workflows lists Workflows and near-Workflows with counts, Harnesses, Suggestion state and filters", () => {
     const html = renderToStaticMarkup(<WorkflowsScreen list={workflows} filter={{ harness: "cursor" }} />);
@@ -161,5 +226,35 @@ describe("UI screens", () => {
     expect(html).toMatch(/<svg[^>]*aria-label="Corrections per week"/);
     expect(html.match(/<rect/g)).toHaveLength(3);
     expect(html).toContain("2026-05-04: 6 Corrections");
+  });
+
+  it("Mind map draws the graph coloured by Harness, with filters and a legend", () => {
+    const html = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{}} />);
+
+    for (const text of ["shop", "Write database migrations", "write a migration for orders", "shop · 2026-05-26", "Write a database migration"]) {
+      expect(html).toContain(text);
+    }
+    expect(html).toMatch(/class="mind-node task harness-claude-code"/);
+    expect(html).toMatch(/class="mind-node session harness-cursor"/);
+    expect(html).toContain('<option value="cursor">Cursor</option>');
+    expect(html).toMatch(/class="legend"[^]*Claude Code[^]*Cursor/);
+  });
+
+  it("Mind map shows a clicked node's details, linking Workflows and Sessions to their screens", () => {
+    const workflowHtml = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{ harness: "cursor" }} initialSelected="workflow:4" />);
+    const sessionHtml = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{}} initialSelected="session:cursor:sess-2" />);
+
+    expect(workflowHtml).toMatch(/class="mind-details[^"]*"[^]*2 Tasks[^]*0.50 Corrections per Task/);
+    expect(workflowHtml).toContain('href="/workflows/4?harness=cursor"');
+    expect(sessionHtml).toContain('href="/sessions/sess-2"');
+  });
+
+  it("Mind map hides a collapsed node's Tasks and Sessions", () => {
+    const html = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{}} initialCollapsed={["workflow:4"]} />);
+
+    expect(html).toContain("Write database migrations");
+    expect(html).not.toContain("write a migration for orders");
+    expect(html).not.toContain("shop · 2026-05-04");
+    expect(html).toContain("2 hidden");
   });
 });
