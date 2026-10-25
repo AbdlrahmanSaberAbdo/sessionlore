@@ -100,6 +100,48 @@ export interface SessionView extends StoredSession {
   messages: SessionViewMessage[];
 }
 
+interface MindMapNodeBase {
+  /** Unique within the map, e.g. `workflow:4`; edges refer to it. */
+  id: string;
+  label: string;
+  /** The Harnesses of the Tasks under (or, for a Session, in) the node; the dashboard colours nodes by them. */
+  harnesses: HarnessId[];
+}
+
+/** One node of the mind map. Ids of the thing it shows (`workflow`, `session`, …) let the dashboard link to its screen. */
+export type MindMapNode =
+  | (MindMapNodeBase & { kind: "project"; path: string })
+  | (MindMapNodeBase & {
+      kind: "workflow";
+      workflow: number;
+      tasks: number;
+      sessions: number;
+      correctionsPerTask: number | null;
+    })
+  | (MindMapNodeBase & { kind: "task"; session: string; position: number; at: string; corrections: number })
+  | (MindMapNodeBase & { kind: "session"; session: string; project: ProjectRef | null; startedAt: string })
+  | (MindMapNodeBase & { kind: "suggestion"; suggestion: number; state: SuggestionState });
+
+export type MindMapNodeKind = MindMapNode["kind"];
+
+/** From a parent node to a child: Project → Workflow → Task → Session, and Workflow → Suggestion. */
+export interface MindMapEdge {
+  id: string;
+  source: string;
+  target: string;
+}
+
+/**
+ * The mind map: Workflows' Tasks within the filter, grouped under their
+ * Projects and linked to their Sessions, with each Workflow's Skill
+ * Suggestions. A Workflow in several Projects hangs under each of them.
+ */
+export interface MindMap {
+  nodes: MindMapNode[];
+  edges: MindMapEdge[];
+  filters: FilterOptions;
+}
+
 export function matchesFilter(
   filter: BrowseFilter,
   item: { harness: HarnessId; project: ProjectRef | null; at: string },

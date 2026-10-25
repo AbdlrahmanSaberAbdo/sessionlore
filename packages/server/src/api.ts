@@ -14,7 +14,8 @@ export function apiRoutes(app: App): Hono {
     const workflow = /^\d+$/.test(id) ? app.browseWorkflow(Number(id), browseFilter(c)) : null;
     return workflow ? c.json(workflow) : c.json({ error: `No Workflow has id ${id}.` }, 404);
   });
-  api.get("/sessions", (c) => c.json(app.browseSessions(browseFilter(c))));
+  api.get("/mind-map", (c) => c.json(app.mindMap(browseFilter(c))));
+  api.get("/sessions",(c) => c.json(app.browseSessions(browseFilter(c))));
   api.get("/sessions/:id", (c) => {
     const session = app.viewSession(c.req.param("id"));
     return session ? c.json(session) : c.json({ error: `No Session has id ${c.req.param("id")}.` }, 404);

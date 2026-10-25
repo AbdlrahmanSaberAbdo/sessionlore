@@ -42,6 +42,10 @@ export type { CorrectionsOverTime, Overview } from "./overview.js";
 export type {
   BrowseFilter,
   FilterOptions,
+  MindMap,
+  MindMapEdge,
+  MindMapNode,
+  MindMapNodeKind,
   NearWorkflowSummary,
   SessionList,
   SessionTaskView,
