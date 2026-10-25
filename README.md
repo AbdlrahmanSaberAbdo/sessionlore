@@ -1,7 +1,5 @@
 # sessionlore
 
-> Agent monitors show what your agents **did**. sessionlore shows what to **teach them next**.
-
 sessionlore reads your past AI coding sessions (Claude Code and Cursor to start), finds the workflows you keep repeating, and drafts skills and rules from them. You review every draft before anything is written to your agent's config.
 
 **Status:** v0.1, early. Expect rough edges and breaking changes.
