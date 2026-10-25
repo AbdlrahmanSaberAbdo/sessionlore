@@ -238,6 +238,26 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 12,
+    name: "suggestion targets and backups",
+    sql: `
+      -- JSON of the existing Skill or Rule a Suggestion updates (its Target); NULL when it creates something new.
+      ALTER TABLE suggestions ADD COLUMN target TEXT;
+      -- JSON of the plugin skill a companion Skill complements.
+      ALTER TABLE suggestions ADD COLUMN companion_of TEXT;
+      -- A file's content from just before accepting a Suggestion overwrote it, so restore can bring it back.
+      CREATE TABLE suggestion_backups (
+        id             INTEGER PRIMARY KEY,
+        suggestion_id  INTEGER NOT NULL REFERENCES suggestions(id) ON DELETE CASCADE,
+        path           TEXT NOT NULL,
+        content        TEXT NOT NULL,
+        created_at     TEXT NOT NULL,
+        restored_at    TEXT
+      );
+      CREATE INDEX suggestion_backups_suggestion ON suggestion_backups (suggestion_id);
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

@@ -8,7 +8,9 @@ import {
   configPath,
   dataDir,
   loadConfig,
+  RenderError,
   storePath,
+  type Suggestion,
   type Adapter,
   type Clock,
   type Embedder,
@@ -261,15 +263,19 @@ const commands: Record<string, Command> = {
     },
   },
   review: {
-    summary: "List Pending Suggestions with their Evidence",
+    summary: "List Pending Suggestions with their Evidence, and a diff for those that update an existing Skill or Rule",
     run({ app, json, out }) {
-      const suggestions = app.listSuggestions("Pending");
+      const suggestions = app.listSuggestions("Pending").map((s) => ({ ...s, diff: targetDiff(app, s) }));
       if (json) return out(JSON.stringify({ suggestions }, null, 2) + "\n");
       if (suggestions.length === 0) return out("No Pending Suggestions. Run `sessionlore suggest` to write some.\n");
       for (const s of suggestions) {
         const scope = scopeLabel(s.scope);
         out(`#${s.id}  ${s.kind === "skill" ? "Skill" : "Rule"}: ${s.title}  [${scope}]\n`);
-        if (s.kind === "skill") {
+        if (s.target) {
+          out(`  Updates ${s.target.path}\n`);
+          out(s.diff === null ? "  (the change can't be shown: accepting it would fail)\n" : indent(s.diff, "    "));
+        } else if (s.kind === "skill") {
+          if (s.companionOf) out(`  Complements the plugin skill ${s.companionOf.plugin}:${s.companionOf.name}\n`);
           out(`  When: ${s.trigger}\n`);
           s.steps.forEach((step, i) => out(`  ${i + 1}. ${step}\n`));
         } else {
@@ -292,6 +298,18 @@ const commands: Record<string, Command> = {
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       out(`Accepted #${result.suggestion.id} ${result.suggestion.title}. Wrote:\n`);
       for (const file of result.files) out(`  ${file.path}\n`);
+      if (result.backups.length > 0) {
+        out(`Backed up the previous ${plural(result.backups.length, "version")}; undo with \`sessionlore restore ${result.suggestion.id}\`.\n`);
+      }
+    },
+  },
+  restore: {
+    summary: "Put back the files an Accepted Suggestion overwrote: restore <id>",
+    run({ app, json, args, out }) {
+      const result = app.restoreSuggestion(suggestionId(args, "restore"));
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      out(`Restored the files #${result.suggestion.id} ${result.suggestion.title} overwrote:\n`);
+      for (const path of result.files) out(`  ${path}\n`);
     },
   },
   reject: {
@@ -429,6 +447,24 @@ function stopped(signal: AbortSignal | undefined): Promise<void> {
 
 /** The dashboard's port unless `--port` says otherwise; a free one is picked when it is taken. */
 const DEFAULT_PORT = 4848;
+
+/** The diff accepting a Suggestion with a Target would make; null without a Target or when it can't be rendered. */
+function targetDiff(app: App, suggestion: Suggestion): string | null {
+  if (!suggestion.target) return null;
+  try {
+    return app
+      .suggestionChanges(suggestion.id)
+      .map((c) => c.diff)
+      .join("");
+  } catch (error) {
+    if (error instanceof RenderError) return null;
+    throw error;
+  }
+}
+
+function indent(text: string, prefix: string): string {
+  return text.replace(/^(?=.)/gm, prefix);
+}
 
 function suggestionId(args: string[], command: string): number {
   const [id] = args;

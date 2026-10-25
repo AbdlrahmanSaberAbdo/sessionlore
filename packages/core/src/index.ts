@@ -30,6 +30,8 @@ export {
   type StatsExportOptions,
   type SuggestResult,
   type AcceptResult,
+  type FileChange,
+  type RestoreResult,
   SuggestionStateError,
   SuggestionEditError,
   type SuggestionForm,
@@ -65,6 +67,10 @@ export {
   type Regeneration,
   suggestionStates,
   type Evidence,
+  type InstalledContext,
+  type InstalledItem,
+  type PluginSkillRef,
+  type Target,
   type ProjectRef,
   type RenderContext,
   type RenderedFile,
@@ -76,6 +82,7 @@ export {
   type SuggestionKind,
   type SuggestionState,
 } from "./suggestion.js";
+export { unifiedDiff } from "./diff.js";
 export { systemClock, type Clock, type Embedder, type Env, type ModelProvider, type ModelProviderModel } from "./ports.js";
 export { resolveProject, type ResolvedProject } from "./project.js";
 export { openReadOnlyDatabase, type ReadOnlyDatabase } from "./store/database.js";
