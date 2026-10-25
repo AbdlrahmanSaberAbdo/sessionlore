@@ -34,7 +34,7 @@ export interface TokenUsage {
 }
 
 /**
- * One message of a Session, in conversation order: something the person typed,
+ * One message of a Session, in the order it happened: something the person typed,
  * visible assistant text, or a tool call the agent made.
  */
 export type HarnessMessage = (
@@ -65,7 +65,7 @@ export interface HarnessSession {
   endedAt: Date;
   /** Only text the person typed; never agent, subagent or Harness-injected text. */
   userMessages: HarnessUserMessage[];
-  /** Assistant replies in the conversation, one per API message however the Harness splits it. */
+  /** Assistant replies in the Session, one per API message however the Harness splits it. */
   assistantTurnCount: number;
   /** Subagent runs started inside the Session; they belong to it, and their tokens are in `tokens`. */
   subagentRunCount: number;
@@ -79,7 +79,7 @@ export interface HarnessSession {
   unrecognized: Record<string, number>;
   /** The model the Session ran with, if the Harness recorded one. */
   model?: string | null;
-  /** Every message in conversation order, for Harnesses whose Adapter reads them. */
+  /** Every message of the Session in order, for Harnesses whose Adapter reads them. */
   messages?: HarnessMessage[];
   /** Skills the agent loaded, in order, for Harnesses that have Skills. */
   skillUses?: HarnessSkillUse[];
@@ -95,7 +95,8 @@ export interface Adapter {
   readonly displayName: string;
   /** Storage locations of this Harness that exist on this machine. */
   discover(ctx: HarnessContext): Promise<string[]>;
-  listSessions(storage: string): AsyncIterable<SessionSource>;
-  /** Returns null when the source holds no conversation (e.g. an empty file). */
+  /** `warn` reports a problem the person should know about, such as storage laid out in a way the Adapter does not know. */
+  listSessions(storage: string, warn?: (text: string) => void): AsyncIterable<SessionSource>;
+  /** Returns null when the source holds no Session (e.g. an empty file). */
   readSession(source: SessionSource): Promise<HarnessSession | null>;
 }

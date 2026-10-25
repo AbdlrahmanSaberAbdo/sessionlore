@@ -13,7 +13,7 @@ import {
 import { useMemo, useState } from "react";
 import { FilterBar, harnessName, plural } from "../components/filters.js";
 import { initiallyCollapsed, layoutMindMap, NODE_HEIGHT, NODE_WIDTH, type PlacedNode } from "../mind-map-layout.js";
-import { filterQuery, Link, suggestionPath } from "../router.js";
+import { filterQuery, Link, sessionPath, suggestionPath } from "../router.js";
 
 /**
  * Projects → Workflows → Tasks → Sessions as a graph, with Suggestions beside
@@ -190,7 +190,7 @@ function NodeFacts({ node, filter }: { node: MindMapNode; filter: BrowseFilter }
           <p>
             Started {node.at.slice(0, 10)} · {plural(node.corrections, "Correction")}
           </p>
-          <Link href={`/sessions/${encodeURIComponent(node.session)}#task-${node.position}`}>Open in its Session</Link>
+          <Link href={sessionPath(node.session, node.position)}>Open in its Session</Link>
         </>
       );
     case "session":
@@ -199,7 +199,7 @@ function NodeFacts({ node, filter }: { node: MindMapNode; filter: BrowseFilter }
           <p>
             {node.project?.name ?? "No Project"} · started {node.startedAt.slice(0, 16).replace("T", " ")}
           </p>
-          <Link href={`/sessions/${encodeURIComponent(node.session)}`}>Open Session</Link>
+          <Link href={sessionPath(node.session)}>Open Session</Link>
         </>
       );
     case "suggestion":

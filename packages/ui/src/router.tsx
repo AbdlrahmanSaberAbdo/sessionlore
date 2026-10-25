@@ -63,3 +63,9 @@ export function filterQuery(filter: BrowseFilter): string {
 export function suggestionPath(id: number): string {
   return `/suggestions/${id}`;
 }
+
+/** The Session viewer's path for a Session, scrolled to one of its Tasks when given. */
+export function sessionPath(session: string, taskPosition?: number | null): string {
+  const path = `/sessions/${encodeURIComponent(session)}`;
+  return taskPosition === undefined || taskPosition === null ? path : `${path}#task-${taskPosition}`;
+}

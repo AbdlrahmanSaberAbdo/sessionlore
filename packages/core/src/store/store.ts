@@ -86,14 +86,26 @@ export interface ClusterTask {
 export type ClusterKind = "tasks" | "corrections";
 
 const clusterTables = {
-  tasks: { clusters: "clusters", members: "tasks", column: "cluster_id", redirects: "cluster_redirects" },
+  tasks: {
+    clusters: "clusters",
+    members: "tasks",
+    column: "cluster_id",
+    redirects: "cluster_redirects",
+    anchors: "cluster_anchors",
+    /** Which rows of `members` are members. */
+    isMember: "1 = 1",
+  },
   corrections: {
     clusters: "correction_clusters",
     members: "user_messages",
     column: "correction_cluster_id",
     redirects: "correction_cluster_redirects",
+    anchors: "correction_cluster_anchors",
+    isMember: "intent = 'Correction'",
   },
 } as const;
+
+type Placements = readonly ({ task: number } & ({ cluster: number } | { newCluster: number }))[];
 
 export interface AnalyzedUserMessage {
   /** When the person sent it. */
@@ -186,6 +198,8 @@ export interface SaveSessionInput {
   session: HarnessSession;
   project: ResolvedProject | null;
   fingerprint: string;
+  /** What Analysis would send for the Session's User Messages; see `analysisFingerprint`. */
+  contentFingerprint: string;
   scanId: number;
 }
 
@@ -225,20 +239,22 @@ export class Store {
 
   /** Stores a Session read by a Scan. Returns whether it was new to the store. */
   saveSession(input: SaveSessionInput): { added: boolean } {
-    const { harness, session, project, fingerprint, scanId } = input;
+    const { harness, session, project, fingerprint, contentFingerprint, scanId } = input;
     return this.db.transaction(() => {
       const projectId = project ? this.projectId(project) : null;
-      const existing = this.db.get<{ id: number }>(
-        "SELECT id FROM sessions WHERE harness = ? AND external_id = ?",
+      const existing = this.db.get<{ id: number; content_fingerprint: string | null }>(
+        "SELECT id, content_fingerprint FROM sessions WHERE harness = ? AND external_id = ?",
         harness,
         session.externalId,
       );
       let sessionId: number;
+      // The same User Messages as before keep their Analysis (Tasks, Intents, Clusters); only their timestamps are refreshed.
+      const sameUserMessages = existing?.content_fingerprint === contentFingerprint;
       if (existing) {
         sessionId = existing.id;
         this.db.run(
           `UPDATE sessions SET project_id = ?, cwd = ?, started_at = ?, ended_at = ?,
-             scan_fingerprint = ?, last_scan_id = ?, assistant_turn_count = ?, subagent_run_count = ?,
+             scan_fingerprint = ?, content_fingerprint = ?, last_scan_id = ?, assistant_turn_count = ?, subagent_run_count = ?,
              input_tokens = ?, output_tokens = ?, cache_creation_tokens = ?, cache_read_tokens = ?, model = ?
            WHERE id = ?`,
           projectId,
@@ -246,20 +262,25 @@ export class Store {
           session.startedAt.toISOString(),
           session.endedAt.toISOString(),
           fingerprint,
+          contentFingerprint,
           scanId,
           ...summaryValues(session),
           session.model ?? null,
           sessionId,
         );
-        this.db.run("DELETE FROM user_messages WHERE session_id = ?", sessionId);
+        if (!sameUserMessages) {
+          this.anchorClusterMembers(sessionId);
+          this.db.run("DELETE FROM user_messages WHERE session_id = ?", sessionId);
+          this.db.run("DELETE FROM tasks WHERE session_id = ?", sessionId);
+        }
         this.db.run("DELETE FROM messages WHERE session_id = ?", sessionId);
-        this.db.run("DELETE FROM tasks WHERE session_id = ?", sessionId);
         this.db.run("DELETE FROM skill_uses WHERE session_id = ?", sessionId);
       } else {
         sessionId = this.db.run(
-          `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, scan_fingerprint, last_scan_id,
-             assistant_turn_count, subagent_run_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, model)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, scan_fingerprint, content_fingerprint,
+             last_scan_id, assistant_turn_count, subagent_run_count, input_tokens, output_tokens, cache_creation_tokens,
+             cache_read_tokens, model)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           harness,
           session.externalId,
           projectId,
@@ -267,19 +288,29 @@ export class Store {
           session.startedAt.toISOString(),
           session.endedAt.toISOString(),
           fingerprint,
+          contentFingerprint,
           scanId,
           ...summaryValues(session),
           session.model ?? null,
         ).lastInsertRowid;
       }
       session.userMessages.forEach((message, position) => {
-        this.db.run(
-          "INSERT INTO user_messages (session_id, position, text, timestamp) VALUES (?, ?, ?, ?)",
-          sessionId,
-          position,
-          message.text,
-          message.timestamp.toISOString(),
-        );
+        if (sameUserMessages) {
+          this.db.run(
+            "UPDATE user_messages SET timestamp = ? WHERE session_id = ? AND position = ?",
+            message.timestamp.toISOString(),
+            sessionId,
+            position,
+          );
+        } else {
+          this.db.run(
+            "INSERT INTO user_messages (session_id, position, text, timestamp) VALUES (?, ?, ?, ?)",
+            sessionId,
+            position,
+            message.text,
+            message.timestamp.toISOString(),
+          );
+        }
       });
       (session.messages ?? []).forEach((message, position) => this.insertMessage(sessionId, position, message));
       (session.skillUses ?? []).forEach((use, position) => {
@@ -404,11 +435,28 @@ export class Store {
     );
   }
 
-  /** Sessions never analyzed, or changed since their last Analysis. */
+  /** Sessions never analyzed, or whose User Messages changed since their last Analysis. */
   sessionsToAnalyze(): SessionToAnalyze[] {
-    return this.sessionsWithMessages(
-      "WHERE s.analyzed_fingerprint IS NULL OR s.analyzed_fingerprint <> s.scan_fingerprint",
+    return this.sessionsWithMessages("WHERE s.analyzed_fingerprint IS NOT s.content_fingerprint");
+  }
+
+  /**
+   * Fills in the content fingerprint of Sessions stored before it existed. One
+   * whose Analysis was of its current content (the old scheme recorded the
+   * change marker it was analyzed at) keeps that Analysis.
+   */
+  backfillContentFingerprints(fingerprint: (userMessages: string[]) => string): void {
+    const rows = this.db.all<{ id: number; scan_fingerprint: string; analyzed_fingerprint: string | null }>(
+      "SELECT id, scan_fingerprint, analyzed_fingerprint FROM sessions WHERE content_fingerprint IS NULL",
     );
+    if (rows.length === 0) return;
+    this.db.transaction(() => {
+      for (const row of rows) {
+        const content = fingerprint(this.userMessageTexts(row.id));
+        const analyzed = row.analyzed_fingerprint === row.scan_fingerprint ? content : row.analyzed_fingerprint;
+        this.db.run("UPDATE sessions SET content_fingerprint = ?, analyzed_fingerprint = ? WHERE id = ?", content, analyzed, row.id);
+      }
+    });
   }
 
   /** A stored Session with its User Messages, or null if no Session has that id. */
@@ -420,11 +468,11 @@ export class Store {
     const sessions = this.db.all<{
       id: number;
       external_id: string;
-      scan_fingerprint: string;
+      content_fingerprint: string;
       project_name: string | null;
       project_root: string | null;
     }>(
-      `SELECT s.id, s.external_id, s.scan_fingerprint, p.name AS project_name, p.root AS project_root
+      `SELECT s.id, s.external_id, s.content_fingerprint, p.name AS project_name, p.root AS project_root
          FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
         ${where}
         ORDER BY s.started_at, s.id`,
@@ -433,7 +481,7 @@ export class Store {
     return sessions.map((s) => ({
       key: s.id,
       id: s.external_id,
-      fingerprint: s.scan_fingerprint,
+      fingerprint: s.content_fingerprint,
       project: s.project_root && s.project_name ? { root: s.project_root, name: s.project_name } : null,
       userMessages: this.userMessageTexts(s.id),
     }));
@@ -442,6 +490,7 @@ export class Store {
   /** Replaces a Session's Tasks with the result of analyzing the content identified by `fingerprint`. */
   saveAnalysis(sessionKey: number, fingerprint: string, tasks: readonly SplitTask[]): void {
     this.db.transaction(() => {
+      this.anchorClusterMembers(sessionKey);
       this.db.run(
         "UPDATE user_messages SET task_id = NULL, intent = NULL, correction_cluster_id = NULL WHERE session_id = ?",
         sessionKey,
@@ -531,17 +580,113 @@ export class Store {
     });
   }
 
-  /** Every Cluster with the `modelId` embeddings of its Tasks. */
+  /** Every Cluster with the `modelId` embeddings of its Tasks, and of those re-analysis removed from it meanwhile. */
   clusterVectors(modelId: string): { id: number; vectors: number[][] }[] {
+    return this.vectorsByCluster("tasks", modelId);
+  }
+
+  private vectorsByCluster(kind: ClusterKind, modelId: string): { id: number; vectors: number[][] }[] {
+    const { clusters, members, column, anchors, isMember } = clusterTables[kind];
     const byCluster = new Map<number, number[][]>();
     for (const row of this.db.all<{ cluster_id: number; embedding: Uint8Array | null; embedding_model: string | null }>(
-      "SELECT c.id AS cluster_id, t.embedding, t.embedding_model FROM clusters c LEFT JOIN tasks t ON t.cluster_id = c.id ORDER BY c.id, t.id",
+      `SELECT c.id AS cluster_id, m.embedding, m.embedding_model, 0 AS anchor, m.id AS member
+         FROM ${clusters} c LEFT JOIN (SELECT * FROM ${members} WHERE ${isMember}) m ON m.${column} = c.id
+       UNION ALL
+       SELECT a.cluster_id, a.embedding, a.embedding_model, 1 AS anchor, a.id AS member FROM ${anchors} a
+        ORDER BY cluster_id, anchor, member`,
     )) {
       const vectors = byCluster.get(row.cluster_id) ?? [];
       byCluster.set(row.cluster_id, vectors);
       if (row.embedding && row.embedding_model === modelId) vectors.push(decodeVector(row.embedding));
     }
     return [...byCluster].map(([id, vectors]) => ({ id, vectors }));
+  }
+
+  /**
+   * Keeps the embeddings of a Session's clustered Tasks and Corrections as
+   * anchors of their Clusters, before re-analysis or a re-read removes them.
+   */
+  private anchorClusterMembers(sessionKey: number): void {
+    for (const kind of ["tasks", "corrections"] as const) {
+      const { members, column, anchors, isMember } = clusterTables[kind];
+      this.db.run(
+        `INSERT INTO ${anchors} (cluster_id, session_id, embedding, embedding_model)
+         SELECT ${column}, session_id, embedding, embedding_model FROM ${members}
+          WHERE session_id = ? AND ${column} IS NOT NULL AND embedding IS NOT NULL AND ${isMember}`,
+        sessionKey,
+      );
+    }
+  }
+
+  /**
+   * Puts members into existing Clusters or new ones. Then each Cluster that
+   * re-analysis emptied and no new member rejoined is folded into the Cluster
+   * most of its anchors' Sessions' new members went to (closest match per
+   * anchor), so its id, name and Suggestions carry over; anchors are dropped,
+   * and Clusters still left without members are deleted.
+   */
+  private place(kind: ClusterKind, placements: Placements, at: Date): void {
+    const { clusters, members, column, anchors, isMember } = clusterTables[kind];
+    this.db.transaction(() => {
+      const created = new Map<number, number>();
+      for (const placement of placements) {
+        let cluster: number;
+        if ("cluster" in placement) cluster = placement.cluster;
+        else {
+          cluster = created.get(placement.newCluster) ?? this.newCluster(kind, at);
+          created.set(placement.newCluster, cluster);
+        }
+        this.db.run(`UPDATE ${members} SET ${column} = ? WHERE id = ?`, cluster, placement.task);
+      }
+      const nonEmpty = `SELECT ${column} FROM ${members} WHERE ${column} IS NOT NULL AND ${isMember}`;
+      const emptied = this.db.all<{ cluster_id: number; session_id: number; embedding: Uint8Array; embedding_model: string }>(
+        `SELECT cluster_id, session_id, embedding, embedding_model FROM ${anchors}
+          WHERE cluster_id NOT IN (${nonEmpty}) ORDER BY cluster_id, id`,
+      );
+      const votes = new Map<number, Map<number, number>>();
+      for (const anchor of emptied) {
+        const vector = decodeVector(anchor.embedding);
+        let best: { cluster: number; score: number } | undefined;
+        for (const m of this.db.all<{ cluster: number; embedding: Uint8Array }>(
+          `SELECT ${column} AS cluster, embedding FROM ${members}
+            WHERE session_id = ? AND ${column} IS NOT NULL AND ${column} <> ? AND embedding_model = ? AND ${isMember}`,
+          anchor.session_id,
+          anchor.cluster_id,
+          anchor.embedding_model,
+        )) {
+          const score = cosine(vector, decodeVector(m.embedding));
+          if (!best || score > best.score) best = { cluster: m.cluster, score };
+        }
+        if (!best) continue;
+        const tally = votes.get(anchor.cluster_id) ?? new Map<number, number>();
+        votes.set(anchor.cluster_id, tally);
+        tally.set(best.cluster, (tally.get(best.cluster) ?? 0) + 1);
+      }
+      for (const [old, tally] of votes) {
+        const [to] = [...tally].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]!;
+        this.fold(kind, old, to);
+      }
+      this.db.run(`DELETE FROM ${anchors}`);
+      this.db.run(`DELETE FROM ${clusters} WHERE id NOT IN (${nonEmpty})`);
+    });
+  }
+
+  /**
+   * Folds Cluster `old` into `to`: rows in other tables that point at it are
+   * re-pointed and its id redirects there. `old` itself is left for the caller to delete.
+   */
+  private fold(kind: ClusterKind, old: number, to: number): void {
+    const { clusters, members, redirects } = clusterTables[kind];
+    const references = this.db.all<{ tbl: string; col: string }>(
+      `SELECT m.name AS tbl, f."from" AS col FROM sqlite_master m, pragma_foreign_key_list(m.name) f
+        WHERE m.type = 'table' AND f."table" = ? AND m.name NOT IN (?, ?)`,
+      clusters,
+      members,
+      redirects,
+    );
+    for (const { tbl, col } of references) this.db.run(`UPDATE "${tbl}" SET "${col}" = ? WHERE "${col}" = ?`, to, old);
+    this.db.run(`UPDATE ${redirects} SET new_id = ? WHERE new_id = ?`, to, old);
+    this.db.run(`INSERT OR REPLACE INTO ${redirects} (old_id, new_id) VALUES (?, ?)`, old, to);
   }
 
   /** Embedded Tasks that belong to no Cluster yet, oldest Session first. */
@@ -556,45 +701,51 @@ export class Store {
       .map((t) => ({ key: t.id, vector: decodeVector(t.embedding) }));
   }
 
-  /** Puts Tasks into existing Clusters or into new ones, then drops Clusters left without Tasks. */
-  placeTasks(placements: readonly ({ task: number } & ({ cluster: number } | { newCluster: number }))[], at: Date): void {
-    this.db.transaction(() => {
-      const created = new Map<number, number>();
-      for (const placement of placements) {
-        let cluster: number;
-        if ("cluster" in placement) cluster = placement.cluster;
-        else {
-          cluster = created.get(placement.newCluster) ?? this.newCluster("tasks", at);
-          created.set(placement.newCluster, cluster);
-        }
-        this.db.run("UPDATE tasks SET cluster_id = ? WHERE id = ?", cluster, placement.task);
-      }
-      this.db.run("DELETE FROM clusters WHERE id NOT IN (SELECT cluster_id FROM tasks WHERE cluster_id IS NOT NULL)");
-    });
+  /** Puts Tasks into existing Clusters or into new ones; see `place` for Clusters re-analysis emptied. */
+  placeTasks(placements: Placements, at: Date): void {
+    this.place("tasks", placements, at);
   }
 
-  /** Every Task with a `modelId` embedding and the Cluster it is in now, oldest Session first. */
-  embeddedTasks(modelId: string): { key: number; vector: number[]; cluster: number | null }[] {
+  /** Every Task with a `modelId` embedding, its title and the Cluster it is in now, oldest Session first. */
+  embeddedTasks(modelId: string): { key: number; vector: number[]; cluster: number | null; text: string }[] {
     return this.db
-      .all<{ id: number; embedding: Uint8Array; cluster_id: number | null }>(
-        `SELECT t.id, t.embedding, t.cluster_id FROM tasks t JOIN sessions s ON s.id = t.session_id
+      .all<{ id: number; embedding: Uint8Array; cluster_id: number | null; title: string }>(
+        `SELECT t.id, t.embedding, t.cluster_id, t.title FROM tasks t JOIN sessions s ON s.id = t.session_id
           WHERE t.embedding IS NOT NULL AND t.embedding_model = ?
           ORDER BY s.started_at, s.id, t.position`,
         modelId,
       )
-      .map((t) => ({ key: t.id, vector: decodeVector(t.embedding), cluster: t.cluster_id }));
+      .map((t) => ({ key: t.id, vector: decodeVector(t.embedding), cluster: t.cluster_id, text: t.title }));
   }
 
-  /** Every Correction with a `modelId` embedding and the Correction Cluster it is in now, oldest Session first. */
-  embeddedCorrections(modelId: string): { key: number; vector: number[]; cluster: number | null }[] {
+  /** Every Correction with a `modelId` embedding, its text and the Correction Cluster it is in now, oldest Session first. */
+  embeddedCorrections(modelId: string): { key: number; vector: number[]; cluster: number | null; text: string }[] {
     return this.db
-      .all<{ id: number; embedding: Uint8Array; correction_cluster_id: number | null }>(
-        `SELECT m.id, m.embedding, m.correction_cluster_id FROM user_messages m JOIN sessions s ON s.id = m.session_id
+      .all<{ id: number; embedding: Uint8Array; correction_cluster_id: number | null; text: string }>(
+        `SELECT m.id, m.embedding, m.correction_cluster_id, m.text FROM user_messages m JOIN sessions s ON s.id = m.session_id
           WHERE m.intent = 'Correction' AND m.embedding IS NOT NULL AND m.embedding_model = ?
           ORDER BY s.started_at, s.id, m.position`,
         modelId,
       )
-      .map((m) => ({ key: m.id, vector: decodeVector(m.embedding), cluster: m.correction_cluster_id }));
+      .map((m) => ({ key: m.id, vector: decodeVector(m.embedding), cluster: m.correction_cluster_id, text: m.text }));
+  }
+
+  /** Ids of the Clusters (or Correction Clusters) the cheap model has named. */
+  namedClusters(kind: ClusterKind): Set<number> {
+    const { clusters } = clusterTables[kind];
+    return new Set(this.db.all<{ id: number }>(`SELECT id FROM ${clusters} WHERE name IS NOT NULL`).map((c) => c.id));
+  }
+
+  /** How many Clusters (or Correction Clusters) are unnamed and have fewer than `minMembers` members. */
+  smallUnnamedClusters(kind: ClusterKind, minMembers: number): number {
+    const { clusters, members, column, isMember } = clusterTables[kind];
+    return Number(
+      this.db.get<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM ${clusters} c
+          WHERE c.name IS NULL AND (SELECT COUNT(*) FROM ${members} WHERE ${column} = c.id AND ${isMember}) < ?`,
+        minMembers,
+      )?.n ?? 0,
+    );
   }
 
   /**
@@ -611,7 +762,7 @@ export class Store {
     targets: ReadonlyMap<number, number>,
     at: Date,
   ): number[] {
-    const { clusters, members, column, redirects } = clusterTables[kind];
+    const { clusters, members, column, anchors } = clusterTables[kind];
     return this.db.transaction(() => {
       const ids = groups.map((g) => g.heir ?? this.newCluster(kind, at));
       this.db.run(`UPDATE ${members} SET ${column} = NULL WHERE ${column} IS NOT NULL`);
@@ -619,20 +770,8 @@ export class Store {
         for (const member of g.members) this.db.run(`UPDATE ${members} SET ${column} = ? WHERE id = ?`, ids[i]!, member);
       });
       const heirs = new Set(groups.map((g) => g.heir));
-      const references = this.db.all<{ tbl: string; col: string }>(
-        `SELECT m.name AS tbl, f."from" AS col FROM sqlite_master m, pragma_foreign_key_list(m.name) f
-          WHERE m.type = 'table' AND f."table" = ? AND m.name NOT IN (?, ?)`,
-        clusters,
-        members,
-        redirects,
-      );
-      for (const [old, group] of targets) {
-        if (heirs.has(old)) continue;
-        const to = ids[group]!;
-        for (const { tbl, col } of references) this.db.run(`UPDATE "${tbl}" SET "${col}" = ? WHERE "${col}" = ?`, to, old);
-        this.db.run(`UPDATE ${redirects} SET new_id = ? WHERE new_id = ?`, to, old);
-        this.db.run(`INSERT OR REPLACE INTO ${redirects} (old_id, new_id) VALUES (?, ?)`, old, to);
-      }
+      for (const [old, group] of targets) if (!heirs.has(old)) this.fold(kind, old, ids[group]!);
+      this.db.run(`DELETE FROM ${anchors}`);
       this.db.run(`DELETE FROM ${clusters} WHERE id NOT IN (SELECT ${column} FROM ${members} WHERE ${column} IS NOT NULL)`);
       return ids;
     });
@@ -916,13 +1055,14 @@ export class Store {
     );
   }
 
-  /** Sets the Scope the person chose for a Suggestion. */
-  overrideScope(id: number, scope: Scope): void {
+  /** Sets the Scope the person chose for a Suggestion, and the Target it keeps (null for none). */
+  overrideScope(id: number, scope: Scope, target: Target | null): void {
     this.db.run(
-      "UPDATE suggestions SET scope_kind = ?, scope_root = ?, scope_name = ?, scope_overridden = 1 WHERE id = ?",
+      "UPDATE suggestions SET scope_kind = ?, scope_root = ?, scope_name = ?, scope_overridden = 1, target = ? WHERE id = ?",
       scope.kind,
       scope.kind === "project" ? scope.project.path : null,
       scope.kind === "project" ? scope.project.name : null,
+      target ? JSON.stringify(target) : null,
       id,
     );
   }
@@ -1071,20 +1211,9 @@ export class Store {
     });
   }
 
-  /** Every Correction Cluster with the `modelId` embeddings of its Corrections. */
+  /** Every Correction Cluster with the `modelId` embeddings of its Corrections, and of those re-analysis removed meanwhile. */
   correctionClusterVectors(modelId: string): { id: number; vectors: number[][] }[] {
-    const byCluster = new Map<number, number[][]>();
-    for (const row of this.db.all<{ cluster_id: number; embedding: Uint8Array | null; embedding_model: string | null }>(
-      `SELECT c.id AS cluster_id, m.embedding, m.embedding_model
-         FROM correction_clusters c
-         LEFT JOIN user_messages m ON m.correction_cluster_id = c.id AND m.intent = 'Correction'
-        ORDER BY c.id, m.id`,
-    )) {
-      const vectors = byCluster.get(row.cluster_id) ?? [];
-      byCluster.set(row.cluster_id, vectors);
-      if (row.embedding && row.embedding_model === modelId) vectors.push(decodeVector(row.embedding));
-    }
-    return [...byCluster].map(([id, vectors]) => ({ id, vectors }));
+    return this.vectorsByCluster("corrections", modelId);
   }
 
   /** Embedded Corrections that belong to no Correction Cluster yet, oldest Session first. */
@@ -1100,27 +1229,9 @@ export class Store {
       .map((m) => ({ key: m.id, vector: decodeVector(m.embedding) }));
   }
 
-  /** Puts Corrections into existing Correction Clusters or new ones, then drops Correction Clusters left empty. */
-  placeCorrections(
-    placements: readonly ({ task: number } & ({ cluster: number } | { newCluster: number }))[],
-    at: Date,
-  ): void {
-    this.db.transaction(() => {
-      const created = new Map<number, number>();
-      for (const placement of placements) {
-        let cluster: number;
-        if ("cluster" in placement) cluster = placement.cluster;
-        else {
-          cluster = created.get(placement.newCluster) ?? this.newCluster("corrections", at);
-          created.set(placement.newCluster, cluster);
-        }
-        this.db.run("UPDATE user_messages SET correction_cluster_id = ? WHERE id = ?", cluster, placement.task);
-      }
-      this.db.run(
-        `DELETE FROM correction_clusters WHERE id NOT IN
-           (SELECT correction_cluster_id FROM user_messages WHERE correction_cluster_id IS NOT NULL AND intent = 'Correction')`,
-      );
-    });
+  /** Puts Corrections into existing Correction Clusters or new ones; see `place` for those re-analysis emptied. */
+  placeCorrections(placements: Placements, at: Date): void {
+    this.place("corrections", placements, at);
   }
 
   /** Correction Clusters not named yet that have at least `minCorrections` Corrections, with their text. */
@@ -1218,6 +1329,18 @@ export class Store {
     if (!row) throw new Error(`Project ${project.root} was not stored`);
     return row.id;
   }
+}
+
+function cosine(a: readonly number[], b: readonly number[]): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i]! * (b[i] ?? 0);
+    na += a[i]! * a[i]!;
+    nb += (b[i] ?? 0) * (b[i] ?? 0);
+  }
+  return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
 }
 
 function decodeVector(blob: Uint8Array): number[] {

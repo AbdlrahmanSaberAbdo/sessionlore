@@ -9,16 +9,18 @@ import {
   configPath,
   dataDir,
   loadConfig,
-  RenderError,
   storePath,
   type Suggestion,
   type Adapter,
   type Clock,
   type Embedder,
   type Env,
+  type HarnessId,
+  type ModelUsage,
   type ModelProvider,
   type Renderer,
   type Scope,
+  wholeNumber,
 } from "@sessionlore/core";
 import { createServer, listen } from "@sessionlore/server";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
@@ -80,6 +82,8 @@ interface CommandContext {
   dataDir: string;
   /** `--last N`: limit a Scan to the N most recent Sessions. */
   last?: number;
+  /** `--harness`: limit a Scan to these Harnesses. */
+  harnesses?: HarnessId[];
   serve: { port: number; open: boolean; openBrowser?: (url: string) => void; uiDir?: string };
   out(text: string): void;
   err(text: string): void;
@@ -94,7 +98,8 @@ interface Command {
 const commands: Record<string, Command> = {
   analyze: {
     summary: "Split new or changed Sessions into Tasks and label each User Message's Intent",
-    async run({ app, json, yes, ask, signal, options, modelProvider, configFile, out, err }) {
+    async run(ctx) {
+      const { app, json, signal, options, modelProvider, out, err } = ctx;
       if (options.showRedacted !== undefined) {
         const request = app.redactedRequest(options.showRedacted);
         if (request === null) {
@@ -108,31 +113,19 @@ const commands: Record<string, Command> = {
         return 1;
       }
       const estimate = app.estimateAnalysis();
-      // With --json, stdout carries only the result; the estimate and question go to stderr.
-      const say = json ? err : out;
       if (estimate.sessions === 0) {
-        say("No new or changed Sessions to analyze.\n");
+        (json ? err : out)("No new or changed Sessions to analyze.\n");
         if (json) out(JSON.stringify(await app.analyze(), null, 2) + "\n");
         return;
       }
-      say(`${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze. Estimated use:\n`);
-      for (const { model, tokens, costUsd } of estimate.models) {
-        const cost = costUsd === null ? "cost unknown" : `about ${dollars(costUsd)}`;
-        say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
-      }
-      const unpriced = estimate.models.filter((m) => m.costUsd === null).map((m) => m.model);
-      if (unpriced.length > 0) say(unpricedHint(unpriced, configFile));
-      if (!yes) {
-        if (!ask) {
-          err("Analysis needs confirmation before it calls the Model Provider. Run `sessionlore analyze --yes` to go ahead.\n");
-          return 1;
-        }
-        const answer = await ask("Continue? [y/N] ");
-        if (!/^\s*y(es)?\s*$/i.test(answer)) {
-          say("Nothing analyzed.\n");
-          return;
-        }
-      }
+      const go = await confirmSpend(ctx, {
+        headline: `${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze`,
+        models: estimate.models,
+        what: "Analysis",
+        command: "analyze",
+        declined: "Nothing analyzed.",
+      });
+      if (go !== true) return go;
       const result = await app.analyze({ signal });
       const exitCode = result.interrupted ? interruptedExitCode : undefined;
       if (json) {
@@ -150,10 +143,7 @@ const commands: Record<string, Command> = {
         out(`${result.failed.length} ${plural(result.failed.length, "Session")} failed:\n`);
         for (const f of result.failed) out(`  ${f.session}: ${f.error}\n`);
       }
-      for (const { model, tokens, costUsd } of result.usage) {
-        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
-        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
-      }
+      reportUsage(out, result.usage);
       return exitCode;
     },
   },
@@ -174,8 +164,8 @@ const commands: Record<string, Command> = {
   },
   scan: {
     summary: "Read Sessions from every Harness on this machine into the local store",
-    async run({ app, json, last, out, warn }) {
-      const result = await app.scan({ last });
+    async run({ app, json, last, harnesses, out, warn }) {
+      const result = await app.scan({ last, harnesses });
       for (const warning of result.harnesses.flatMap((h) => h.warnings)) warn(`Warning: ${warning}\n`);
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       for (const harness of result.harnesses) {
@@ -201,21 +191,15 @@ const commands: Record<string, Command> = {
         for (const t of w.tasks) out(`  ${t.at.slice(0, 10)}  ${t.harness}  ${t.title}\n`);
       }
       if (result.nearWorkflows.length > 0) out("\nNear-Workflows:\n");
-      for (const w of result.nearWorkflows) {
-        const needs = [
-          w.needs.tasks > 0 ? `${w.needs.tasks} more ${plural(w.needs.tasks, "Task")}` : "",
-          w.needs.sessions > 0 ? `${w.needs.sessions} more ${plural(w.needs.sessions, "Session")}` : "",
-        ].filter(Boolean);
-        out(`  ${w.name}  (needs ${needs.join(" and ")})\n`);
-      }
+      for (const w of result.nearWorkflows) out(`  ${w.name}  (needs ${needsText([w.needs.tasks, "Task"], [w.needs.sessions, "Session"])})\n`);
     },
   },
   workflow: {
     summary: "Show one Workflow or Cluster with its Tasks: workflow <id>",
     run({ app, json, args, out }) {
-      const [id] = args;
-      if (!id || !/^\d+$/.test(id)) throw new Error("Which Workflow? Usage: sessionlore workflow <id>");
-      const workflow = app.getWorkflow(Number(id));
+      const id = wholeNumber(args[0]);
+      if (id === null) throw new Error("Which Workflow? Usage: sessionlore workflow <id>");
+      const workflow = app.getWorkflow(id);
       if (!workflow) throw new Error(`No Workflow has id ${id}. Run \`sessionlore workflows\` to list them.`);
       if (json) return out(JSON.stringify({ workflow }, null, 2) + "\n");
       out(`${workflow.name}  (${workflow.counted.tasks} Tasks in ${workflow.counted.sessions} Sessions)\n`);
@@ -224,7 +208,19 @@ const commands: Record<string, Command> = {
   },
   recluster: {
     summary: "Rebuild every Cluster from scratch, mapping old Workflows onto the new ones",
-    async run({ app, json, signal, out }) {
+    async run(ctx) {
+      const { app, json, signal, out } = ctx;
+      const estimate = await app.estimateRecluster();
+      if (estimate.clusters > 0) {
+        const go = await confirmSpend(ctx, {
+          headline: `${estimate.clusters} new ${plural(estimate.clusters, "Cluster")} to name`,
+          models: estimate.models,
+          what: "Re-clustering",
+          command: "recluster",
+          declined: "Nothing re-clustered.",
+        });
+        if (go !== true) return go;
+      }
       const result = await app.recluster({ signal });
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       const sections = [
@@ -240,29 +236,38 @@ const commands: Record<string, Command> = {
         for (const { from, to } of mapped) out(from.id === to.id ? `  ${from.name}: kept\n` : `  ${from.name} -> ${to.name}\n`);
         for (const c of created) out(`  New: ${c.name}\n`);
       }
-      for (const { model, tokens, costUsd } of result.usage) {
-        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
-        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
-      }
+      reportUsage(out, result.usage);
     },
   },
   suggest: {
     summary: "Write Suggestions with the strong model: a Skill for each Workflow and a Rule for each Correction Cluster that has none",
-    async run({ app, json, signal, modelProvider, out, err }) {
+    async run(ctx) {
+      const { app, json, signal, modelProvider, out, err } = ctx;
       if (!modelProvider.ok) {
         err(modelProvider.problem);
         return 1;
       }
+      const estimate = await app.estimateSuggestions();
+      if (estimate.suggestions === 0) {
+        (json ? err : out)("No Workflow or Correction Cluster needs a Suggestion.\n");
+        if (json) out(JSON.stringify(await app.suggest(), null, 2) + "\n");
+        return;
+      }
+      const go = await confirmSpend(ctx, {
+        headline: `${estimate.suggestions} ${plural(estimate.suggestions, "Suggestion")} to write`,
+        models: estimate.models,
+        what: "Writing Suggestions",
+        command: "suggest",
+        declined: "Nothing written.",
+      });
+      if (go !== true) return go;
       const result = await app.suggest({ signal });
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       out(`${result.created.length} ${plural(result.created.length, "Suggestion")} written\n`);
       for (const f of result.failed) {
         out(`  ${"workflow" in f ? `Workflow ${f.workflow}` : `Correction Cluster ${f.correctionCluster}`} failed: ${f.error}\n`);
       }
-      for (const { model, tokens, costUsd } of result.usage) {
-        const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
-        out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
-      }
+      reportUsage(out, result.usage);
       if (result.created.length > 0) out("Run `sessionlore review` to see them.\n");
     },
   },
@@ -357,9 +362,14 @@ const commands: Record<string, Command> = {
       if (kind !== "user" && kind !== "project") {
         throw new Error("Which Scope? Usage: sessionlore scope <id> user, or sessionlore scope <id> project [folder]");
       }
-      const suggestion = app.setScope(id, kind === "user" ? { kind } : { kind, folder: folder && resolve(folder) });
-      if (json) return out(JSON.stringify({ suggestion }, null, 2) + "\n");
+      const result = app.setScope(id, kind === "user" ? { kind } : { kind, folder: folder && resolve(folder) });
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      const { suggestion, droppedTarget } = result;
       out(`#${suggestion.id} ${suggestion.title} will install in ${scopeLabel(suggestion.scope)}.\n`);
+      if (droppedTarget) {
+        const what = suggestion.kind === "skill" ? "a new Skill" : "a new Rule";
+        out(`It no longer updates ${droppedTarget.path}, which is outside that Scope; accepting it adds ${what} there instead.\n`);
+      }
     },
   },
   corrections: {
@@ -378,11 +388,7 @@ const commands: Record<string, Command> = {
       }
       if (result.nearCorrectionClusters.length > 0) out("\nNear Correction Clusters:\n");
       for (const c of result.nearCorrectionClusters) {
-        const needs = [
-          c.needs.corrections > 0 ? `${c.needs.corrections} more ${plural(c.needs.corrections, "Correction")}` : "",
-          c.needs.sessions > 0 ? `${c.needs.sessions} more ${plural(c.needs.sessions, "Session")}` : "",
-        ].filter(Boolean);
-        out(`  ${c.name}  (needs ${needs.join(" and ")})\n`);
+        out(`  ${c.name}  (needs ${needsText([c.needs.corrections, "Correction"], [c.needs.sessions, "Session"])})\n`);
       }
     },
   },
@@ -399,12 +405,14 @@ const commands: Record<string, Command> = {
   },
   serve: {
     summary: "Open the dashboard in your browser, served on localhost only",
-    async run({ app, serve, signal, out }) {
-      const server = await listen(createServer({ app, uiDir: serve.uiDir }), { port: serve.port });
-      out(`sessionlore dashboard: ${server.url}\nPress Ctrl-C to stop.\n`);
-      if (serve.open) serve.openBrowser?.(server.url);
-      await stopped(signal);
-      await server.close();
+    async run({ app, json, serve, signal, out, err }) {
+      await serveDashboard(
+        app,
+        serve,
+        signal,
+        (url) => (json ? out(JSON.stringify({ url }, null, 2) + "\n") : out(`sessionlore dashboard: ${url}\n`)),
+        json ? err : out,
+      );
     },
   },
   stats: {
@@ -438,25 +446,32 @@ const commands: Record<string, Command> = {
 
 interface StandaloneContext {
   clock: Clock;
+  json: boolean;
   /** Folder `demo` creates its throwaway home directory in. */
   demoRoot: string;
   signal?: AbortSignal;
   serve: CommandContext["serve"];
   out(text: string): void;
+  err(text: string): void;
 }
 
 /** Commands that never open the person's own store or config. */
 const standaloneCommands: Record<string, { summary: string; run(ctx: StandaloneContext): Promise<void> }> = {
   demo: {
     summary: "Open the dashboard on a made-up history; needs no Model Provider and never touches your own store",
-    async run({ clock, demoRoot, signal, serve, out }) {
+    async run({ clock, demoRoot, json, signal, serve, out, err }) {
       const demo = await openDemo({ root: demoRoot, clock });
       try {
-        const server = await listen(createServer({ app: demo.app, uiDir: serve.uiDir }), { port: serve.port });
-        out(`sessionlore demo dashboard (made-up Sessions, kept apart from your own): ${server.url}\nPress Ctrl-C to stop.\n`);
-        if (serve.open) serve.openBrowser?.(server.url);
-        await stopped(signal);
-        await server.close();
+        await serveDashboard(
+          demo.app,
+          serve,
+          signal,
+          (url) =>
+            json
+              ? out(JSON.stringify({ url, dataset: demoSummary(demo.app) }, null, 2) + "\n")
+              : out(`sessionlore demo dashboard (made-up Sessions, kept apart from your own): ${url}\n`),
+          json ? err : out,
+        );
       } finally {
         demo.close();
       }
@@ -466,6 +481,39 @@ const standaloneCommands: Record<string, { summary: string; run(ctx: StandaloneC
 
 function scopeLabel(scope: Scope): string {
   return scope.kind === "project" ? `Project scope (${scope.project.name})` : "User scope";
+}
+
+/**
+ * Serves the dashboard for `app` until the person interrupts, announcing its
+ * address with `announce` and how to stop it with `say`, and opening the browser unless told not to.
+ */
+async function serveDashboard(
+  app: App,
+  serve: CommandContext["serve"],
+  signal: AbortSignal | undefined,
+  announce: (url: string) => void,
+  say: (text: string) => void,
+): Promise<void> {
+  const server = await listen(createServer({ app, uiDir: serve.uiDir }), { port: serve.port });
+  announce(server.url);
+  say("Press Ctrl-C to stop.\n");
+  if (serve.open) serve.openBrowser?.(server.url);
+  await stopped(signal);
+  await server.close();
+}
+
+/** What the demo dataset holds, as `demo --json` reports it. */
+function demoSummary(app: App) {
+  const overview = app.overview();
+  return {
+    sessions: overview.counts.sessions,
+    tasks: overview.counts.tasks,
+    harnesses: [...new Set(app.listSessions().map((s) => s.harness))].sort(),
+    workflows: overview.counts.workflows,
+    nearWorkflows: app.listWorkflows().nearWorkflows.length,
+    correctionClusters: app.listCorrections().correctionClusters.length,
+    pendingSuggestions: app.listSuggestions("Pending").length,
+  };
 }
 
 /** Resolves once the person interrupts (Ctrl-C), at once if they already have. */
@@ -483,15 +531,7 @@ const DEFAULT_PORT = 4848;
 /** The diff accepting a Suggestion with a Target would make; null without a Target or when it can't be rendered. */
 function targetDiff(app: App, suggestion: Suggestion): string | null {
   if (!suggestion.target) return null;
-  try {
-    return app
-      .suggestionChanges(suggestion.id)
-      .map((c) => c.diff)
-      .join("");
-  } catch (error) {
-    if (error instanceof RenderError) return null;
-    throw error;
-  }
+  return app.reviewSuggestion(suggestion.id)?.changes?.map((c) => c.diff).join("") ?? null;
 }
 
 function indent(text: string, prefix: string): string {
@@ -499,11 +539,11 @@ function indent(text: string, prefix: string): string {
 }
 
 function suggestionId(args: string[], command: string): number {
-  const [id] = args;
-  if (!id || !/^\d+$/.test(id)) {
+  const id = wholeNumber(args[0]);
+  if (id === null) {
     throw new Error(`Which Suggestion? Usage: sessionlore ${command} <id>. Run \`sessionlore review\` to list them.`);
   }
-  return Number(id);
+  return id;
 }
 
 /** The conventional exit code for a command stopped by SIGINT. */
@@ -519,6 +559,50 @@ function count(n: number): string {
 
 function dollars(usd: number): string {
   return `$${usd.toFixed(2)}`;
+}
+
+/**
+ * Shows what a command expects to spend and, unless `--yes`, asks to go ahead.
+ * With `--json`, stdout carries only the result, so the estimate and question
+ * go to stderr. Resolves to true to go ahead, or the exit code to stop with.
+ */
+async function confirmSpend(
+  { json, yes, ask, configFile, out, err }: CommandContext,
+  estimate: { headline: string; models: ModelUsage[]; what: string; command: string; declined: string },
+): Promise<true | number | undefined> {
+  const say = json ? err : out;
+  say(`${estimate.headline}. Estimated use:\n`);
+  for (const { model, tokens, costUsd } of estimate.models) {
+    const cost = costUsd === null ? "cost unknown" : `about ${dollars(costUsd)}`;
+    say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+  }
+  const unpriced = estimate.models.filter((m) => m.costUsd === null).map((m) => m.model);
+  if (unpriced.length > 0) say(unpricedHint(unpriced, configFile));
+  if (yes) return true;
+  if (!ask) {
+    err(`${estimate.what} needs confirmation before it calls the Model Provider. Run \`sessionlore ${estimate.command} --yes\` to go ahead.\n`);
+    return 1;
+  }
+  const answer = await ask("Continue? [y/N] ");
+  if (/^\s*y(es)?\s*$/i.test(answer)) return true;
+  say(`${estimate.declined}\n`);
+  return undefined;
+}
+
+/** The tokens and cost a command actually used, per model. */
+function reportUsage(out: (text: string) => void, usage: readonly ModelUsage[]): void {
+  for (const { model, tokens, costUsd } of usage) {
+    const cost = costUsd === null ? "cost unknown" : dollars(costUsd);
+    out(`Used: ${model}: ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+  }
+}
+
+/** "2 more Tasks and 1 more Session", leaving out what is not needed. */
+function needsText(...needs: [number, string][]): string {
+  return needs
+    .filter(([n]) => n > 0)
+    .map(([n, word]) => `${n} more ${plural(n, word)}`)
+    .join(" and ");
 }
 
 function unpricedHint(models: string[], configFile: string): string {
@@ -537,7 +621,8 @@ function usage(): string {
     `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\n` +
     `Options:\n  --json                     Machine-readable output\n` +
     `  --last N                   scan: read only the N most recent Sessions\n` +
-    `  --yes, -y                  analyze: skip the cost estimate confirmation\n` +
+    `  --harness <id>             scan: read only claude-code or cursor (repeat, or separate with commas)\n` +
+    `  --yes, -y                  analyze, suggest, recluster: skip the cost estimate confirmation\n` +
     `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n` +
     `  --export                   stats: print aggregate numbers only (counts, Corrections per Task, Workflow names)\n` +
     `  --anonymize                stats --export: replace Workflow names with neutral labels\n` +
@@ -596,6 +681,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
         help: { type: "boolean", short: "h" },
         "show-redacted": { type: "string" },
         last: { type: "string" },
+        harness: { type: "string", multiple: true },
         export: { type: "boolean", default: false },
         anonymize: { type: "boolean", default: false },
         port: { type: "string" },
@@ -625,16 +711,28 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
 
   let last: number | undefined;
   if (parsed.values.last !== undefined) {
-    last = /^\d+$/.test(parsed.values.last) ? Number(parsed.values.last) : 0;
+    last = wholeNumber(parsed.values.last) ?? 0;
     if (last < 1) {
       io.stderr(`--last takes a positive whole number of Sessions, not "${parsed.values.last}"\n\n${usage()}`);
       return 2;
     }
   }
 
+  let harnesses: HarnessId[] | undefined;
+  if (parsed.values.harness !== undefined) {
+    const known = (io.adapters ?? allAdapters).map((a) => a.harness);
+    const named = parsed.values.harness.flatMap((h) => h.split(",")).map((h) => h.trim()).filter(Boolean);
+    const unknown = named.filter((h) => !known.includes(h as HarnessId));
+    if (named.length === 0 || unknown.length > 0) {
+      io.stderr(`--harness takes ${known.join(" or ")} (repeat it or separate them with commas), not "${unknown.join(", ")}"\n\n${usage()}`);
+      return 2;
+    }
+    harnesses = named as HarnessId[];
+  }
+
   let port = DEFAULT_PORT;
   if (parsed.values.port !== undefined) {
-    port = /^\d+$/.test(parsed.values.port) ? Number(parsed.values.port) : -1;
+    port = wholeNumber(parsed.values.port) ?? -1;
     if (port < 0 || port > 65535) {
       io.stderr(`--port takes a port number from 0 to 65535, not "${parsed.values.port}"\n\n${usage()}`);
       return 2;
@@ -644,7 +742,15 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
   const serve = { port, open: !parsed.values["no-open"], openBrowser: io.openBrowser, uiDir: io.uiDir };
   if (standalone) {
     try {
-      await standalone.run({ clock: io.clock, demoRoot: io.demoRoot ?? tmpdir(), signal: io.signal, serve, out: io.stdout });
+      await standalone.run({
+        clock: io.clock,
+        json: parsed.values.json ?? false,
+        demoRoot: io.demoRoot ?? tmpdir(),
+        signal: io.signal,
+        serve,
+        out: io.stdout,
+        err: io.stderr,
+      });
       return 0;
     } catch (error) {
       io.stderr(`sessionlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -672,6 +778,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider,
       configFile: configPath(io.homeDir),
       last,
+      harnesses,
       editFile: io.editFile ?? ((path) => openInEditor(path, io.env)),
       dataDir: dataDir(io.homeDir),
       serve,

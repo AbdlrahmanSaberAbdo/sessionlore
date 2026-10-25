@@ -3,7 +3,9 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
+  completeModelProviderSettings,
   modelProviderNames,
+  type CompleteModelProviderSettings,
   type Env,
   type ModelProvider,
   type ModelProviderModel,
@@ -11,30 +13,50 @@ import {
   type ModelProviderSettings,
 } from "@sessionlore/core";
 import { createOllama } from "ollama-ai-provider-v2";
-import { z } from "zod";
 
 /**
  * Builds the Model Provider from the config file's `modelProvider` section,
  * with `SESSIONLORE_*` environment variables taking precedence (ADR 0007).
  */
 
-/** The provider's own environment variable for its API key. */
-const defaultKeyEnv: Partial<Record<ModelProviderName, string>> = {
-  anthropic: "ANTHROPIC_API_KEY",
-  openai: "OPENAI_API_KEY",
-  google: "GOOGLE_GENERATIVE_AI_API_KEY",
+/** What sessionlore knows about each provider, and how to build its models. */
+interface ProviderSpec {
+  /** The provider's own environment variable for its API key. */
+  keyEnv?: string;
+  needsKey: boolean;
+  needsBaseURL?: boolean;
+  models(settings: CompleteModelProviderSettings, apiKey: string | undefined): (id: string) => ModelProviderModel;
+}
+
+const providers: Record<ModelProviderName, ProviderSpec> = {
+  anthropic: {
+    keyEnv: "ANTHROPIC_API_KEY",
+    needsKey: true,
+    models: ({ baseURL }, apiKey) => createAnthropic({ apiKey, baseURL }),
+  },
+  openai: {
+    keyEnv: "OPENAI_API_KEY",
+    needsKey: true,
+    models: ({ baseURL }, apiKey) => createOpenAI({ apiKey, baseURL }),
+  },
+  google: {
+    keyEnv: "GOOGLE_GENERATIVE_AI_API_KEY",
+    needsKey: true,
+    models: ({ baseURL }, apiKey) => createGoogleGenerativeAI({ apiKey, baseURL }),
+  },
+  ollama: {
+    needsKey: false,
+    models: ({ baseURL }) => createOllama({ baseURL: baseURL ?? "http://localhost:11434/api" }),
+  },
+  "openai-compatible": {
+    needsKey: false,
+    needsBaseURL: true,
+    models: ({ baseURL }, apiKey) => {
+      const provider = createOpenAICompatible({ name: "openai-compatible", baseURL: baseURL!, apiKey });
+      return (id) => provider.chatModel(id);
+    },
+  },
 };
-
-const settingsSchema = z.object({
-  provider: z.enum(modelProviderNames),
-  cheapModel: z.string().min(1),
-  strongModel: z.string().min(1),
-  apiKey: z.string().min(1).optional(),
-  apiKeyEnv: z.string().min(1).optional(),
-  baseURL: z.string().url().optional(),
-});
-
-type Settings = z.infer<typeof settingsSchema>;
 
 export type ModelProviderResolution = { ok: true; modelProvider: ModelProvider } | { ok: false; problem: string };
 
@@ -54,52 +76,33 @@ export function resolveModelProvider(
   const merged = { ...fromFile, ...fromEnv };
   if (Object.keys(merged).length === 0) return { ok: false, problem: notConfiguredMessage(configFile) };
 
-  const parsed = settingsSchema.safeParse(merged);
-  if (!parsed.success) {
-    const issues = parsed.error.issues.map((i) => `  - ${i.path.join(".") || "modelProvider"}: ${i.message}`);
+  const checked = completeModelProviderSettings(merged);
+  if (!checked.ok) {
+    const issues = checked.issues.map((issue) => `  - ${issue}`);
     return {
       ok: false,
       problem: `The Model Provider configuration is invalid:\n${issues.join("\n")}\n\n${notConfiguredMessage(configFile)}`,
     };
   }
-  return build(parsed.data, env);
+  return build(checked.settings, env);
 }
 
-function build(settings: Settings, env: Env): ModelProviderResolution {
-  const keyEnv = settings.apiKeyEnv ?? defaultKeyEnv[settings.provider];
+function build(settings: CompleteModelProviderSettings, env: Env): ModelProviderResolution {
+  const spec = providers[settings.provider];
+  const keyEnv = settings.apiKeyEnv ?? spec.keyEnv;
   const apiKey = settings.apiKey ?? (keyEnv ? env[keyEnv] : undefined);
-  const needsKey = settings.provider !== "ollama" && settings.provider !== "openai-compatible";
-  if (needsKey && !apiKey) {
+  if (spec.needsKey && !apiKey) {
     const where = [keyEnv, "SESSIONLORE_API_KEY"].filter(Boolean).join(" or ");
     return {
       ok: false,
       problem: `No API key found for the ${settings.provider} Model Provider. Set ${where}, or "apiKey" under "modelProvider" in the config file.\n`,
     };
   }
-  if (settings.provider === "openai-compatible" && !settings.baseURL) {
-    return { ok: false, problem: `The openai-compatible Model Provider needs a "baseURL".\n` };
+  if (spec.needsBaseURL && !settings.baseURL) {
+    return { ok: false, problem: `The ${settings.provider} Model Provider needs a "baseURL".\n` };
   }
-
-  const model = modelFactory(settings, apiKey);
+  const model = spec.models(settings, apiKey);
   return { ok: true, modelProvider: { cheap: model(settings.cheapModel), strong: model(settings.strongModel) } };
-}
-
-function modelFactory(settings: Settings, apiKey: string | undefined): (id: string) => ModelProviderModel {
-  const { baseURL } = settings;
-  switch (settings.provider) {
-    case "anthropic":
-      return createAnthropic({ apiKey, baseURL });
-    case "openai":
-      return createOpenAI({ apiKey, baseURL });
-    case "google":
-      return createGoogleGenerativeAI({ apiKey, baseURL });
-    case "ollama":
-      return createOllama({ baseURL: baseURL ?? "http://localhost:11434/api" });
-    case "openai-compatible": {
-      const provider = createOpenAICompatible({ name: "openai-compatible", baseURL: baseURL!, apiKey });
-      return (id) => provider.chatModel(id);
-    }
-  }
 }
 
 function notConfiguredMessage(configFile: string): string {

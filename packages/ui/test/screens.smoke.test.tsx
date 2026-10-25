@@ -174,7 +174,7 @@ const skillReview: SuggestionReview = {
   form: { title: "Write a database migration", trigger: "Use when changing a table.", steps: ["Write it.", "Run it."] },
   changes: [{ path: "/code/shop/.claude/skills/write-a-database-migration/SKILL.md", before: null, after: "# Write a database migration\n", diff: "" }],
   changesError: null,
-  evidence: [{ ...evidence, link: "/sessions/sess-1#task-0" }],
+  evidence: [{ ...evidence, taskPosition: 0 }],
   projects: filters.projects,
 };
 
@@ -198,7 +198,7 @@ const ruleReview: SuggestionReview = {
       diff: "--- /code/shop/CLAUDE.md\n+++ /code/shop/CLAUDE.md\n@@ -1 +1 @@\n-- Always run things with pnpm.\n+- Use pnpm.\n",
     },
   ],
-  evidence: [{ ...evidence, correction: { text: "no, use pnpm", at: "2026-05-04T09:05:00.000Z" }, link: "/sessions/sess-1#task-0" }],
+  evidence: [{ ...evidence, correction: { text: "no, use pnpm", at: "2026-05-04T09:05:00.000Z" }, taskPosition: 0 }],
 };
 
 const noActions: ReviewActions = { save: async () => {}, setScope: async () => {}, accept: async () => {}, reject: async () => {} };

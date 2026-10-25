@@ -258,6 +258,41 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX suggestion_backups_suggestion ON suggestion_backups (suggestion_id);
     `,
   },
+  {
+    version: 13,
+    name: "analysis fingerprints from content",
+    sql: `
+      -- Identifies what Analysis would send for the Session (its redacted User Messages, in order; see
+      -- analysisFingerprint()), so a Session is analyzed again only when that changes. NULL until computed:
+      -- rows stored before this migration are filled in when the App next opens the store.
+      ALTER TABLE sessions ADD COLUMN content_fingerprint TEXT;
+    `,
+  },
+  {
+    version: 14,
+    name: "cluster anchors",
+    sql: `
+      -- The embedding of a Task (or Correction) that re-analyzing its Session removed, kept for its Cluster until
+      -- clustering has placed the Session's new Tasks (ADR 0008). Similar new Tasks rejoin the Cluster through it,
+      -- and a Cluster none rejoin is folded into the one its Sessions' new Tasks went to, so it keeps its Suggestions.
+      CREATE TABLE cluster_anchors (
+        id               INTEGER PRIMARY KEY,
+        cluster_id       INTEGER NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+        session_id       INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        embedding        BLOB NOT NULL,
+        embedding_model  TEXT NOT NULL
+      );
+      CREATE INDEX cluster_anchors_cluster ON cluster_anchors (cluster_id);
+      CREATE TABLE correction_cluster_anchors (
+        id               INTEGER PRIMARY KEY,
+        cluster_id       INTEGER NOT NULL REFERENCES correction_clusters(id) ON DELETE CASCADE,
+        session_id       INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        embedding        BLOB NOT NULL,
+        embedding_model  TEXT NOT NULL
+      );
+      CREATE INDEX correction_cluster_anchors_cluster ON correction_cluster_anchors (cluster_id);
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

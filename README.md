@@ -23,13 +23,14 @@ Needs Node.js 22.13 or newer. Every command below also takes `--json` for machin
 npx sessionlore demo
 ```
 
-Opens the dashboard on a made-up history. It needs no Model Provider, downloads nothing, and never reads or writes your own sessions or store. Add `--no-open` to only print the address, or `--port N` to pick the port (default 4848). Press Ctrl-C to stop it.
+Opens the dashboard on a made-up history. It needs no Model Provider, downloads nothing, and never reads or writes your own sessions or store. Add `--no-open` to only print the address, `--port N` to pick the port (default 4848), or `--json` to print the address and a summary of the made-up dataset as JSON. Press Ctrl-C to stop it.
 
 ### 2. Scan your sessions
 
 ```bash
 npx sessionlore scan            # every finished session on this machine
 npx sessionlore scan --last 50  # only the 50 most recent
+npx sessionlore scan --harness cursor  # only one tool: claude-code or cursor (repeat, or comma-separate)
 npx sessionlore sessions        # list what was stored
 ```
 
@@ -84,13 +85,15 @@ npx sessionlore corrections   # corrections you keep typing
 npx sessionlore tasks         # every task with its labels
 ```
 
+Workflows stay put between runs, so their history stays comparable. `npx sessionlore recluster` rebuilds the grouping from scratch on request, keeping each old workflow's id where its tasks went; when that leaves new groups to name, it shows the cheap model's estimated cost and asks first (`--yes` skips the question).
+
 ### 5. Suggest
 
 ```bash
 npx sessionlore suggest
 ```
 
-Uses the strong model to draft a skill for each workflow and a rule for each repeated correction that has none yet. If you already have a matching skill or rule, the draft updates it instead.
+Uses the strong model to draft a skill for each workflow and a rule for each repeated correction that has none yet. If you already have a matching skill or rule, the draft updates it instead. Like `analyze`, it shows a cost estimate and asks before calling the model; `--yes` skips the question.
 
 ### 6. Review
 
@@ -104,7 +107,7 @@ npx sessionlore reject <id>    # drop it; it won't be proposed again
 npx sessionlore restore <id>   # undo an accept, putting back any file it overwrote
 ```
 
-Skills are written to `.claude/skills/<name>/SKILL.md` and rules to `CLAUDE.md`, in the project or in `~/.claude`, depending on the draft's scope. Nothing is written until you accept.
+Skills are written to `.claude/skills/<name>/SKILL.md` and rules to `CLAUDE.md`, in the project or in `~/.claude`, depending on the draft's scope. Nothing is written until you accept. A draft that updates an existing skill or rule updates it where it is; moving such a draft to another scope with `scope` makes it a new skill or rule there instead, and `scope` says so.
 
 `npx sessionlore stats` shows how often accepted skills get used afterwards.
 

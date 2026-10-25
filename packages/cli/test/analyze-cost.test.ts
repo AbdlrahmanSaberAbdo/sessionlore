@@ -1,3 +1,4 @@
+import { appendFileSync, utimesSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
 import { runCli, writeConfig } from "./support/harness.js";
@@ -185,5 +186,50 @@ describe("analyze cost estimate", () => {
     expect(again.exitCode).toBe(0);
     expect(again.stdout).toContain("No new or changed Sessions to analyze");
     expect(provider.requests()).toHaveLength(1);
+  });
+
+  it("does not analyze a Session again when its file was rewritten without changing what the person typed", async () => {
+    const [written] = writeSessions("add a checkout button");
+    const provider = scriptedModelProvider(() => oneTask);
+    await runCli(home, ["scan"]);
+    await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
+
+    // Claude Code appends records the person did not type (here a reply), and the file's size and time change.
+    appendFileSync(written!.file, "\n");
+    utimesSync(written!.file, new Date("2026-05-20T09:00:00.000Z"), new Date("2026-05-20T09:00:00.000Z"));
+    const rescan = (await runCli(home, ["scan", "--json"])).json();
+    const again = await runCli(home, ["analyze"], { modelProvider: provider.modelProvider, answers: [] });
+
+    expect(rescan.harnesses[0]).toMatchObject({ updated: 1 });
+    expect(again.stdout).toContain("No new or changed Sessions to analyze");
+    expect(provider.requests()).toHaveLength(1);
+    const { sessions } = (await runCli(home, ["tasks", "--json"])).json();
+    expect(sessions[0].tasks.map((t: any) => t.title)).toEqual(["Do it"]);
+  });
+
+  it("analyzes a Session again when what the person typed changed", async () => {
+    const [written] = writeSessions("add a checkout button");
+    const provider = scriptedModelProvider((request) => ({
+      tasks: [
+        {
+          title: "Do it",
+          messages: [...request.matchAll(/<message index=\\"(\d+)\\">/g)].map(([, i]) => ({ index: Number(i), intent: "New Task" })),
+        },
+      ],
+    }));
+    await runCli(home, ["scan"]);
+    await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
+
+    writeClaudeSession(home, {
+      id: written!.id,
+      cwd: home.gitRepo("code/shop"),
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [turn.user("add a checkout button"), turn.assistant("Added."), turn.user("now make it blue")],
+    });
+    await runCli(home, ["scan"]);
+    const again = await runCli(home, ["analyze", "--yes"], { modelProvider: provider.modelProvider });
+
+    expect(again.stdout).toContain("1 Session analyzed");
+    expect(provider.requests()).toHaveLength(2);
   });
 });

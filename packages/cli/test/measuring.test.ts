@@ -108,7 +108,7 @@ async function stats(opts: RunOptions = {}, ...flags: string[]) {
 async function acceptMigrationSkill(opts: RunOptions) {
   const shop = migrationWorkflow();
   await analyze(opts);
-  const suggested = await runCli(home, ["suggest", "--json"], opts);
+  const suggested = await runCli(home, ["suggest", "--json", "--yes"], opts);
   const [id] = suggested.json().created;
   const accepted = await runCli(home, ["accept", String(id), "--json"], opts);
   expect(accepted.exitCode, accepted.stderr).toBe(0);

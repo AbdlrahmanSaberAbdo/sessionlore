@@ -121,7 +121,7 @@ describe("workflows API", () => {
   it("shows each Workflow's Suggestion and its state", async () => {
     migrationsAndReleaseNotes();
     await scanAndAnalyze();
-    const [created] = (await cli("suggest", "--json")).json().created;
+    const [created] = (await cli("suggest", "--json", "--yes")).json().created;
     await cli("reject", String(created));
 
     const [workflow] = (await get("/api/workflows")).workflows;
@@ -170,7 +170,7 @@ describe("workflow API", () => {
   it("shows one Workflow's Tasks, each with the Session it is in, and its Suggestions", async () => {
     const ids = migrationsAndReleaseNotes();
     await scanAndAnalyze();
-    const [created] = (await cli("suggest", "--json")).json().created;
+    const [created] = (await cli("suggest", "--json", "--yes")).json().created;
     const [{ id }] = (await get("/api/workflows")).workflows;
 
     const workflow = await get(`/api/workflows/${id}`);

@@ -1,5 +1,5 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import type { FixtureHome } from "./home.js";
@@ -55,13 +55,26 @@ export interface CursorComposerSpec {
   stepSeconds?: number;
   /**
    * How the composer records its folder: in its header's `workspaceIdentifier`
-   * (newer Cursor), or only through `workspaceStorage/<id>/workspace.json`.
+   * (newer Cursor), or only through `workspaceStorage/<id>/workspace.json`,
+   * which names the folder or, for a multi-root workspace, a `.code-workspace`
+   * file listing `workspaceFolders` (by default just `folder`).
    */
-  workspaceMapping?: "header" | "workspace-json";
+  workspaceMapping?: "header" | "workspace-json" | "code-workspace";
+  /** The folders a `code-workspace` mapping's file lists, in order. */
+  workspaceFolders?: string[];
   /** Makes this a subagent composer spawned by `parentId`'s `task_v2` tool call `toolCallId`. */
   subagentOf?: { parentId: string; toolCallId: string; typeName?: string };
   /** composerData format version (`_v`). Defaults to 18. */
   composerVersion?: number;
+}
+
+export interface CursorDatabaseOptions {
+  /**
+   * Where the composers' headers are: the `composerHeaders` table (current
+   * Cursor), only the older `composer.composerData` list in `ItemTable`, or
+   * neither (a format sessionlore does not know).
+   */
+  headers?: "table" | "legacy" | "none";
 }
 
 export interface WrittenCursorDatabase {
@@ -91,7 +104,12 @@ export function cursorDatabasePath(home: FixtureHome): string {
 }
 
 /** Writes (replacing any previous one) a Cursor database holding `composers`. */
-export function writeCursorDatabase(home: FixtureHome, composers: CursorComposerSpec[]): WrittenCursorDatabase {
+export function writeCursorDatabase(
+  home: FixtureHome,
+  composers: CursorComposerSpec[],
+  options: CursorDatabaseOptions = {},
+): WrittenCursorDatabase {
+  const headers = options.headers ?? "table";
   const path = cursorDatabasePath(home);
   mkdirSync(dirname(path), { recursive: true });
   for (const suffix of ["", "-wal", "-shm"]) rmSync(path + suffix, { force: true });
@@ -101,18 +119,31 @@ export function writeCursorDatabase(home: FixtureHome, composers: CursorComposer
     PRAGMA journal_mode = WAL;
     CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
     CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
-    CREATE TABLE composerHeaders (
-      composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER,
-      isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, value TEXT, subagentTypeName TEXT
-    );
-    CREATE INDEX composerHeaders_workspace ON composerHeaders (workspaceId, isSubagent, isArchived, recency);
-    CREATE INDEX composerHeaders_recency ON composerHeaders (recency, composerId);
   `);
+  if (headers === "table") {
+    db.exec(`
+      CREATE TABLE composerHeaders (
+        composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER,
+        isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, value TEXT, subagentTypeName TEXT
+      );
+      CREATE INDEX composerHeaders_workspace ON composerHeaders (workspaceId, isSubagent, isArchived, recency);
+      CREATE INDEX composerHeaders_recency ON composerHeaders (recency, composerId);
+    `);
+  }
   const kv = db.prepare("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)");
-  const header = db.prepare(
-    `INSERT INTO composerHeaders (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt, value, subagentTypeName)
-     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
-  );
+  const legacyHeads: object[] = [];
+  const header = {
+    run(...row: [string, string, number, number, number, number, number, string, string | null]) {
+      if (headers === "table") {
+        db.prepare(
+          `INSERT INTO composerHeaders (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt, value, subagentTypeName)
+           VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+        ).run(...row);
+      } else if (headers === "legacy") {
+        legacyHeads.push(JSON.parse(row[7]));
+      }
+    },
+  };
 
   const composerIds: string[] = [];
   for (const spec of composers) {
@@ -140,10 +171,20 @@ export function writeCursorDatabase(home: FixtureHome, composers: CursorComposer
       id: workspaceId,
       uri: { $mid: 1, fsPath: spec.folder, external: uri.href, path: uri.pathname, scheme: "file" },
     };
-    if (spec.workspaceMapping === "workspace-json") {
+    const mapped = spec.workspaceMapping === "workspace-json" || spec.workspaceMapping === "code-workspace";
+    if (mapped) {
       const dir = join(cursorUserDir(home), "workspaceStorage", workspaceId);
       mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "workspace.json"), JSON.stringify({ folder: uri.href }));
+      if (spec.workspaceMapping === "code-workspace") {
+        // A multi-root workspace file, written by hand as people do: comments, relative paths and a trailing comma.
+        const file = home.resolve(join("workspaces", `${basename(spec.folder)}.code-workspace`));
+        mkdirSync(dirname(file), { recursive: true });
+        const folders = (spec.workspaceFolders ?? [spec.folder]).map((f) => `    { "path": ${JSON.stringify(relative(dirname(file), f))} },`);
+        writeFileSync(file, `// Opened with File > Open Workspace\n{\n  "folders": [\n${folders.join("\n")}\n  ],\n  /* editor settings */\n  "settings": {},\n}\n`);
+        writeFileSync(join(dir, "workspace.json"), JSON.stringify({ workspace: pathToFileURL(file).href }));
+      } else {
+        writeFileSync(join(dir, "workspace.json"), JSON.stringify({ folder: uri.href }));
+      }
     }
     const subagentInfo = spec.subagentOf && {
       subagentType: 1,
@@ -170,7 +211,7 @@ export function writeCursorDatabase(home: FixtureHome, composers: CursorComposer
         lastUpdatedAt,
         unifiedMode: "agent",
         isDraft: false,
-        ...(spec.workspaceMapping === "workspace-json" ? {} : { workspaceIdentifier }),
+        ...(mapped ? {} : { workspaceIdentifier }),
         ...(subagentInfo ? { subagentInfo } : {}),
       }),
       spec.subagentOf ? (spec.subagentOf.typeName ?? "explore") : null,
@@ -193,6 +234,12 @@ export function writeCursorDatabase(home: FixtureHome, composers: CursorComposer
           .filter((c) => c.subagentOf?.parentId === composerId && c.id)
           .map((c) => c.id),
       }),
+    );
+  }
+  if (headers === "legacy") {
+    db.prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)").run(
+      "composer.composerData",
+      JSON.stringify({ allComposers: legacyHeads, selectedComposerIds: [] }),
     );
   }
   db.close();

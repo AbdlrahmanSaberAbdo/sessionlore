@@ -1,7 +1,7 @@
 import type { ReviewQueue, Scope, ScopeChoice, SuggestionForm, SuggestionReview } from "@sessionlore/core";
 import { useState } from "react";
 import { harnessName, plural } from "../components/filters.js";
-import { Link, suggestionPath } from "../router.js";
+import { Link, sessionPath, suggestionPath } from "../router.js";
 
 /** The review queue: Pending Suggestions with their kind, Scope and Evidence count. */
 export function ReviewQueueScreen({ queue }: { queue: ReviewQueue }) {
@@ -124,7 +124,7 @@ export function ReviewScreen({
           {review.evidence.map((e, i) => (
             <li key={i}>
               <span className="muted small">{(e.correction?.at ?? e.task.at).slice(0, 10)}</span>{" "}
-              <Link href={e.link}>{e.correction ? `“${e.correction.text}”` : e.task.title}</Link>
+              <Link href={sessionPath(e.session.id, e.taskPosition)}>{e.correction ? `“${e.correction.text}”` : e.task.title}</Link>
               <span className="muted small">
                 {e.correction ? ` in ${e.task.title}` : ""} · {harnessName(e.session.harness)}
                 {e.project ? ` · ${e.project.name}` : ""}

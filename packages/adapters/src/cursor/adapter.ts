@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   openReadOnlyDatabase,
@@ -15,9 +15,10 @@ import {
 
 /**
  * Reads Cursor Sessions from its global `state.vscdb` (ADR 0002): one Session
- * per non-subagent row of `composerHeaders`, its messages from the
- * `composerData:<id>` and `bubbleId:<id>:<bubble>` keys of `cursorDiskKV`.
- * The database is always opened read-only.
+ * per non-subagent row of `composerHeaders` (or, in a database without that
+ * table, per entry of the older `composer.composerData` list in `ItemTable`),
+ * its messages from the `composerData:<id>` and `bubbleId:<id>:<bubble>` keys
+ * of `cursorDiskKV`. The database is always opened read-only.
  */
 export const cursorAdapter: Adapter = {
   harness: "cursor",
@@ -32,22 +33,32 @@ export const cursorAdapter: Adapter = {
     return candidates.filter((path) => existsSync(path));
   },
 
-  async *listSessions(database: string): AsyncIterable<SessionSource> {
-    const headers = withDatabase(database, (db) =>
-      db.all<{ composerId: string; lastUpdatedAt: number | bigint | null; isSubagent: number | bigint | null; value: SqlBlob }>(
-        "SELECT composerId, lastUpdatedAt, isSubagent, value FROM composerHeaders",
-      ),
-    );
+  async *listSessions(database: string, warn?: (text: string) => void): AsyncIterable<SessionSource> {
+    const { layout, headers } = withDatabase(database, (db) => {
+      const layout = headerLayout(db);
+      return { layout, headers: layout === "none" ? [] : allHeaders(db, layout) };
+    });
+    if (layout === "legacy") {
+      warn?.(
+        `Cursor: ${database} has no composerHeaders table, so its Sessions were read from the older composer list. ` +
+          "Some Sessions may have no Project; if this Cursor is current, please report this so sessionlore can read it.",
+      );
+    } else if (layout === "none") {
+      warn?.(
+        `Cursor: ${database} has neither a composerHeaders table nor the older composer list, so no Cursor Sessions were read. ` +
+          "Cursor may have changed its storage format; please report this so sessionlore can read it.",
+      );
+    }
     // A Session changes when its composer or any of its subagent composers does.
     const updates = new Map<string, { markers: string[]; lastActivity: number }>();
     const roots: string[] = [];
     for (const header of headers) {
-      const owner = Number(header.isSubagent) === 1 ? rootParentOf(parseJson(header.value)) : header.composerId;
+      const owner = header.isSubagent ? rootParentOf(header.head) : header.composerId;
       if (!owner) continue; // a subagent whose parent is unknown is not a Session of its own
       if (owner === header.composerId) roots.push(owner);
       const group = updates.get(owner) ?? { markers: [], lastActivity: 0 };
-      group.markers.push(`${header.composerId}@${String(header.lastUpdatedAt ?? "")}`);
-      group.lastActivity = Math.max(group.lastActivity, Number(header.lastUpdatedAt ?? 0));
+      group.markers.push(`${header.composerId}@${header.lastUpdatedAt ?? ""}`);
+      group.lastActivity = Math.max(group.lastActivity, header.lastUpdatedAt ?? 0);
       updates.set(owner, group);
     }
     for (const composerId of roots) {
@@ -62,9 +73,11 @@ export const cursorAdapter: Adapter = {
   },
 
   async readSession(source: SessionSource): Promise<HarnessSession | null> {
-    return withDatabase(source.location, (db) =>
-      readComposer({ db, database: source.location, unrecognized: {}, tokens: emptyUsage() }, source.externalId),
-    );
+    return withDatabase(source.location, (db) => {
+      const layout = headerLayout(db);
+      if (layout === "none") return null;
+      return readComposer({ db, layout, database: source.location, unrecognized: {}, tokens: emptyUsage() }, source.externalId);
+    });
   },
 };
 
@@ -85,6 +98,8 @@ interface ThreadEntry {
 
 interface Reader {
   db: ReadOnlyDatabase;
+  /** Where the composers' headers are. */
+  layout: HeaderLayout;
   /** Path of the `state.vscdb` being read. */
   database: string;
   /** What was skipped or not fully understood, by shape (see `HarnessSession.unrecognized`). */
@@ -99,6 +114,87 @@ interface SubagentHeader {
   toolCallId: string | null;
 }
 
+/**
+ * Where a database keeps its composers' headers: the `composerHeaders` table,
+ * the older `composer.composerData` list in `ItemTable`, or neither.
+ */
+type HeaderLayout = "table" | "legacy" | "none";
+
+/** A composer's header, wherever the database keeps it. */
+interface ComposerHeader {
+  composerId: string;
+  /** Cursor's id for the workspace it was opened in; null in the older composer list. */
+  workspaceId: string | null;
+  lastUpdatedAt: number | null;
+  createdAt: number | null;
+  isSubagent: boolean;
+  subagentTypeName: string | null;
+  head: Json | null;
+}
+
+const LEGACY_HEADERS_KEY = "composer.composerData";
+
+function headerLayout(db: ReadOnlyDatabase): HeaderLayout {
+  const tables = new Set(db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").map((t) => t.name));
+  if (tables.has("composerHeaders")) return "table";
+  if (tables.has("ItemTable") && db.get("SELECT 1 FROM ItemTable WHERE key = ?", LEGACY_HEADERS_KEY)) return "legacy";
+  return "none";
+}
+
+function allHeaders(db: ReadOnlyDatabase, layout: Exclude<HeaderLayout, "none">): ComposerHeader[] {
+  if (layout === "legacy") {
+    const list = parseJson(db.get<{ value: SqlBlob }>("SELECT value FROM ItemTable WHERE key = ?", LEGACY_HEADERS_KEY)?.value);
+    const composers = Array.isArray(list?.allComposers) ? (list.allComposers as unknown[]) : [];
+    return composers.flatMap((value): ComposerHeader[] => {
+      const head = value && typeof value === "object" ? (value as Json) : null;
+      if (typeof head?.composerId !== "string") return [];
+      const info = head.subagentInfo as Json | undefined;
+      const time = (v: unknown) => (typeof v === "number" ? v : null);
+      return [
+        {
+          composerId: head.composerId,
+          workspaceId: null,
+          lastUpdatedAt: time(head.lastUpdatedAt),
+          createdAt: time(head.createdAt),
+          isSubagent: info !== undefined,
+          subagentTypeName: typeof info?.subagentTypeName === "string" ? info.subagentTypeName : null,
+          head,
+        },
+      ];
+    });
+  }
+  return db
+    .all<{
+      composerId: string;
+      workspaceId: string | null;
+      lastUpdatedAt: number | bigint | null;
+      createdAt: number | bigint | null;
+      isSubagent: number | bigint | null;
+      subagentTypeName: string | null;
+      value: SqlBlob;
+    }>("SELECT composerId, workspaceId, lastUpdatedAt, createdAt, isSubagent, subagentTypeName, value FROM composerHeaders")
+    .map((row) => ({
+      composerId: row.composerId,
+      workspaceId: row.workspaceId,
+      lastUpdatedAt: row.lastUpdatedAt === null ? null : Number(row.lastUpdatedAt),
+      createdAt: row.createdAt === null ? null : Number(row.createdAt),
+      isSubagent: Number(row.isSubagent) === 1,
+      subagentTypeName: row.subagentTypeName,
+      head: parseJson(row.value),
+    }));
+}
+
+/** One composer's header. The table is queried by id; the older list is small enough to search. */
+function headerOf(reader: Reader, composerId: string): ComposerHeader | null {
+  if (reader.layout === "legacy") return allHeaders(reader.db, "legacy").find((h) => h.composerId === composerId) ?? null;
+  const row = reader.db.get<{ workspaceId: string | null; value: SqlBlob }>(
+    "SELECT workspaceId, value FROM composerHeaders WHERE composerId = ?",
+    composerId,
+  );
+  if (!row) return null;
+  return { composerId, workspaceId: row.workspaceId, lastUpdatedAt: null, createdAt: null, isSubagent: false, subagentTypeName: null, head: parseJson(row.value) };
+}
+
 function withDatabase<T>(path: string, fn: (db: ReadOnlyDatabase) => T): T {
   const db = openReadOnlyDatabase(path);
   try {
@@ -109,12 +205,8 @@ function withDatabase<T>(path: string, fn: (db: ReadOnlyDatabase) => T): T {
 }
 
 function readComposer(reader: Reader, composerId: string): HarnessSession | null {
-  const { db } = reader;
-  const header = db.get<{ workspaceId: string | null; value: SqlBlob }>(
-    "SELECT workspaceId, value FROM composerHeaders WHERE composerId = ?",
-    composerId,
-  );
-  const head = parseJson(header?.value);
+  const header = headerOf(reader, composerId);
+  const head = header?.head ?? null;
   const data = readComposerData(reader, composerId);
   if (!head || !data || head.isDraft === true) return null;
 
@@ -192,7 +284,7 @@ function addTokens(reader: Reader, bubble: Json): void {
  * its type-1 bubbles count as assistant text: the parent agent wrote them, not the person.
  */
 function readThread(reader: Reader, composerId: string, data: Json, subagent: string | null, seen: Set<string>): HarnessMessage[] {
-  const children = subagentsOf(reader.db, composerId).filter((child) => !seen.has(child.composerId));
+  const children = subagentsOf(reader, composerId).filter((child) => !seen.has(child.composerId));
   const childThread = (child: SubagentHeader): HarnessMessage[] => {
     seen.add(child.composerId);
     const childData = readComposerData(reader, child.composerId);
@@ -214,15 +306,22 @@ function readThread(reader: Reader, composerId: string, data: Json, subagent: st
   return messages;
 }
 
-function subagentsOf(db: ReadOnlyDatabase, composerId: string): SubagentHeader[] {
-  const rows = db.all<{ composerId: string; subagentTypeName: string | null; value: SqlBlob }>(
-    `SELECT composerId, subagentTypeName, value FROM composerHeaders
-      WHERE isSubagent = 1 AND json_extract(value, '$.subagentInfo.parentComposerId') = ?
-      ORDER BY createdAt`,
-    composerId,
-  );
+function subagentsOf(reader: Reader, composerId: string): SubagentHeader[] {
+  const rows =
+    reader.layout === "legacy"
+      ? allHeaders(reader.db, "legacy")
+          .filter((h) => h.isSubagent && (h.head?.subagentInfo as Json | undefined)?.parentComposerId === composerId)
+          .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+      : reader.db
+          .all<{ composerId: string; subagentTypeName: string | null; value: SqlBlob }>(
+            `SELECT composerId, subagentTypeName, value FROM composerHeaders
+              WHERE isSubagent = 1 AND json_extract(value, '$.subagentInfo.parentComposerId') = ?
+              ORDER BY createdAt`,
+            composerId,
+          )
+          .map((row) => ({ composerId: row.composerId, subagentTypeName: row.subagentTypeName, head: parseJson(row.value) }));
   return rows.map((row) => {
-    const info = (parseJson(row.value)?.subagentInfo ?? {}) as Json;
+    const info = (row.head?.subagentInfo ?? {}) as Json;
     const typeName = row.subagentTypeName || (typeof info.subagentTypeName === "string" ? info.subagentTypeName : "");
     return {
       composerId: row.composerId,
@@ -295,18 +394,69 @@ function workspaceFolder(head: Json): string | null {
 /**
  * The folder Cursor's workspace mapping gives a workspace id:
  * `User/workspaceStorage/<workspaceId>/workspace.json`, next to `User/globalStorage`.
+ * It names the folder, or for a multi-root workspace the `.code-workspace`
+ * file, whose first folder is the Session's (Scan resolves it to its Project).
  */
 function mappedWorkspaceFolder(database: string, workspaceId: string | null): string | null {
   if (!workspaceId) return null;
   const file = join(dirname(dirname(database)), "workspaceStorage", workspaceId, "workspace.json");
   if (!existsSync(file)) return null;
   const mapping = parseJson(readFileSync(file, "utf8"));
-  if (typeof mapping?.folder !== "string" || !mapping.folder.startsWith("file:")) return null;
+  if (typeof mapping?.folder === "string") return filePath(mapping.folder);
+  if (typeof mapping?.workspace === "string") {
+    const workspaceFile = filePath(mapping.workspace);
+    return workspaceFile ? firstWorkspaceFolder(workspaceFile) : null;
+  }
+  return null;
+}
+
+/** The first folder a `.code-workspace` file lists, resolved against the file's own folder. */
+function firstWorkspaceFolder(workspaceFile: string): string | null {
+  if (!existsSync(workspaceFile)) return null;
+  const workspace = parseJson(stripJsonComments(readFileSync(workspaceFile, "utf8")));
+  const folders = Array.isArray(workspace?.folders) ? (workspace.folders as { path?: unknown; uri?: unknown }[]) : [];
+  for (const folder of folders) {
+    if (typeof folder?.path === "string") return resolve(dirname(workspaceFile), folder.path);
+    if (typeof folder?.uri === "string") {
+      const path = filePath(folder.uri);
+      if (path) return path;
+    }
+  }
+  return null;
+}
+
+/** The local path of a `file:` URL, or null for anything else. */
+function filePath(url: string): string | null {
+  if (!url.startsWith("file:")) return null;
   try {
-    return fileURLToPath(mapping.folder);
+    return fileURLToPath(url);
   } catch {
     return null;
   }
+}
+
+/** `.code-workspace` files are JSON with comments and trailing commas; this leaves plain JSON. */
+function stripJsonComments(text: string): string {
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]!;
+    if (char === '"') {
+      const end = /"(?:[^"\\]|\\.)*"/y;
+      end.lastIndex = i;
+      const string = end.exec(text)?.[0] ?? text.slice(i);
+      result += string;
+      i += string.length - 1;
+    } else if (char === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      result += "\n";
+    } else if (char === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close === -1 ? text.length : close + 1;
+    } else {
+      result += char;
+    }
+  }
+  return result.replace(/,(\s*[}\]])/g, "$1");
 }
 
 /** What the person typed, without the `<timestamp>`/`<user_query>` wrapper newer Cursor versions add. */

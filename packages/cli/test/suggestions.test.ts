@@ -67,7 +67,7 @@ async function analyze(opts: RunOptions) {
 }
 
 async function suggest(opts: RunOptions) {
-  const result = await runCli(home, ["suggest", "--json"], opts);
+  const result = await runCli(home, ["suggest", "--json", "--yes"], opts);
   expect(result.exitCode, result.stderr).toBe(0);
   return result.json();
 }
@@ -490,5 +490,103 @@ describe("suggesting again", () => {
     expect(again).toMatchObject({ created: [], replaced: [] });
     expect((await review()).map((s: any) => s.id)).toEqual([first]);
     expect(opts.requests().filter((r) => r.includes("<workflow"))).toHaveLength(1);
+  });
+});
+
+describe("the cost of suggest", () => {
+  const strongRequests = (opts: { requests(): string[] }) => opts.requests().filter((r) => r.includes("<workflow"));
+
+  it("shows an estimate for the strong model and writes nothing when the person declines", async () => {
+    workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+
+    const result = await runCli(home, ["suggest"], { ...opts, answers: ["n"] });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("1 Suggestion to write");
+    expect(result.stdout).toMatch(/mock-strong: about [\d,]+ input and [\d,]+ output tokens/);
+    expect(result.stdout).toContain("Nothing written");
+    expect(strongRequests(opts)).toHaveLength(0);
+    expect(await review()).toEqual([]);
+  });
+
+  it("writes after a yes and reports what it used", async () => {
+    workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+
+    const result = await runCli(home, ["suggest"], { ...opts, answers: ["y"] });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toContain("1 Suggestion written");
+    expect(result.stdout).toMatch(/Used: mock-strong: 10 input and 20 output tokens/);
+    expect(strongRequests(opts)).toHaveLength(1);
+  });
+
+  it("without a terminal to ask on, asks for --yes and spends nothing", async () => {
+    workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+
+    const result = await runCli(home, ["suggest"], opts);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("sessionlore suggest --yes");
+    expect(strongRequests(opts)).toHaveLength(0);
+  });
+
+  it("neither asks nor calls the Model Provider when no Workflow needs a Suggestion", async () => {
+    workflowInOneProject();
+    const opts = options();
+    await analyze(opts);
+    await suggest(opts);
+
+    const again = await runCli(home, ["suggest"], { ...opts, answers: [] });
+
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout).toContain("No Workflow or Correction Cluster needs a Suggestion");
+    expect(strongRequests(opts)).toHaveLength(1);
+  });
+});
+
+describe("the cost of analyze", () => {
+  it("counts naming Clusters in the estimate when Tasks will be clustered", async () => {
+    workflowInOneProject();
+    const estimate = async (opts: RunOptions) => {
+      const result = await runCli(home, ["analyze"], { ...opts, answers: ["n"] });
+      const [, input] = /mock-cheap: about ([\d,]+) input/.exec(result.stdout)!;
+      return Number(input!.replace(/,/g, ""));
+    };
+    expect((await runCli(home, ["scan"])).exitCode).toBe(0);
+
+    const withoutClustering = await estimate({ ...options(), embedder: undefined });
+    const withClustering = await estimate(options());
+
+    expect(withClustering).toBeGreaterThan(withoutClustering);
+  });
+});
+
+describe("the cost of recluster", () => {
+  it("asks before naming the new Clusters with the cheap model, and changes nothing when declined", async () => {
+    const { shop } = workflowInOneProject();
+    session(shop, "2026-05-26T09:00:00.000Z", "fix the login bug", "fix the signup bug");
+    const opts = options();
+    await analyze(opts);
+    const before = (await runCli(home, ["workflows", "--json"])).json();
+    const requests = opts.requests().length;
+    // An Embedder that also groups the two bug fixes makes a new Cluster of them, which needs a name.
+    const together = { ...opts, embedder: topicEmbedder(["database migration", "release notes", "fix the"], "embedder-fixes") };
+
+    const declined = await runCli(home, ["recluster"], { ...together, answers: ["n"] });
+    const noTerminal = await runCli(home, ["recluster"], together);
+
+    expect(declined.exitCode).toBe(0);
+    expect(declined.stdout).toMatch(/mock-cheap: about [\d,]+ input/);
+    expect(declined.stdout).toContain("Nothing re-clustered");
+    expect(noTerminal.exitCode).toBe(1);
+    expect(noTerminal.stderr).toContain("sessionlore recluster --yes");
+    expect(opts.requests()).toHaveLength(requests);
+    expect((await runCli(home, ["workflows", "--json"])).json()).toEqual(before);
   });
 });

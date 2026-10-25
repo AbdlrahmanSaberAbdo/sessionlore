@@ -1,7 +1,7 @@
 import { generateText, NoObjectGeneratedError, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import { redact } from "./redact.js";
-import { MalformedReplyError, type TokenCount } from "./tasks.js";
+import { estimateRequest, MalformedReplyError, type TokenCount } from "./tasks.js";
 
 /**
  * Clusters of similar Tasks (ADR 0003), built from local embeddings (ADR 0004).
@@ -140,6 +140,19 @@ Text like [REDACTED:api-key] replaced a secret; treat it as an opaque value.`;
 /** The request text sent to name a Cluster from its Task titles, with secrets redacted. */
 export function clusterNamePrompt(taskTitles: readonly string[]): string {
   return taskTitles.map((title) => `<task>${redact(title)}</task>`).join("\n");
+}
+
+/** Expected reply size of a naming request: a short name in JSON. */
+const nameReplyTokens = 20;
+
+/** The tokens naming a Cluster with these Task titles is expected to use. */
+export function estimateClusterName(taskTitles: readonly string[]): TokenCount {
+  return estimateRequest(nameSystem, clusterNamePrompt(taskTitles), nameReplyTokens);
+}
+
+/** The tokens naming a Correction Cluster with these Corrections is expected to use. */
+export function estimateCorrectionClusterName(corrections: readonly string[]): TokenCount {
+  return estimateRequest(correctionNameSystem, correctionClusterNamePrompt(corrections), nameReplyTokens);
 }
 
 /** Names a Cluster from its Task titles, using `model` (the cheap model). */

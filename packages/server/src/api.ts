@@ -6,6 +6,7 @@ import {
   type BrowseFilter,
   type HarnessId,
   type ScopeChoice,
+  wholeNumber,
 } from "@sessionlore/core";
 import { Hono, type Context, type Next } from "hono";
 
@@ -20,7 +21,8 @@ export function apiRoutes(app: App): Hono {
   api.get("/workflows", (c) => c.json(app.browseWorkflows(browseFilter(c))));
   api.get("/workflows/:id", (c) => {
     const id = c.req.param("id");
-    const workflow = /^\d+$/.test(id) ? app.browseWorkflow(Number(id), browseFilter(c)) : null;
+    const number = wholeNumber(id);
+    const workflow = number === null ? null : app.browseWorkflow(number, browseFilter(c));
     return workflow ? c.json(workflow) : c.json({ error: `No Workflow has id ${id}.` }, 404);
   });
   api.get("/mind-map", (c) => c.json(app.mindMap(browseFilter(c))));
@@ -35,7 +37,7 @@ export function apiRoutes(app: App): Hono {
     return review ? c.json(review) : c.json({ error: `No Suggestion has id ${c.req.param("id")}.` }, 404);
   });
   api.put("/suggestions/:id{[0-9]+}", async (c) => c.json(app.editSuggestion(suggestionId(c), await jsonBody(c))));
-  api.put("/suggestions/:id{[0-9]+}/scope", async (c) => c.json(app.setScope(suggestionId(c), scopeChoice(await jsonBody(c)))));
+  api.put("/suggestions/:id{[0-9]+}/scope", async (c) => c.json(app.setScope(suggestionId(c), scopeChoice(await jsonBody(c))).suggestion));
   api.post("/suggestions/:id{[0-9]+}/accept", (c) => c.json(app.acceptSuggestion(suggestionId(c))));
   api.post("/suggestions/:id{[0-9]+}/reject", (c) => c.json(app.rejectSuggestion(suggestionId(c))));
   api.all("*", (c) => c.json({ error: `No API endpoint at ${c.req.path}` }, 404));

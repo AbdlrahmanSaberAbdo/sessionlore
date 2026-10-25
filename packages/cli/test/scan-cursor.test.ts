@@ -245,4 +245,91 @@ describe("scan of Cursor Sessions", () => {
 
     expect(sessions[0].project).toEqual({ name: "my shop", path: repo });
   });
+
+  it("finds the Project of a Session in a multi-root workspace from the folders its .code-workspace file lists", async () => {
+    const repo = home.gitRepo("code/shop");
+    const docs = home.gitRepo("code/shop-docs");
+    writeCursorDatabase(home, [
+      {
+        folder: repo,
+        workspaceMapping: "code-workspace",
+        workspaceFolders: [repo, docs],
+        createdAt: "2026-05-01T09:00:00.000Z",
+        bubbles: [bubble.user("hi")],
+      },
+    ]);
+
+    const scan = await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(scan.stderr).toBe("");
+    expect(sessions[0].project).toEqual({ name: "shop", path: repo });
+  });
+
+  it("reads Sessions from the older composer list, with a warning, when the database has no composerHeaders table", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeCursorDatabase(
+      home,
+      [{ id: "old-composer", folder: repo, createdAt: "2026-05-01T09:00:00.000Z", bubbles: [bubble.user("add a cart"), bubble.assistant("Added.")] }],
+      { headers: "legacy" },
+    );
+
+    const scan = await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(scan.exitCode, scan.stderr).toBe(0);
+    expect(scan.stderr).toMatch(/Warning: Cursor: .*composerHeaders/);
+    expect(sessions.map((s: any) => [s.id, s.userMessageCount, s.project])).toEqual([["old-composer", 1, { name: "shop", path: repo }]]);
+  });
+
+  it("warns instead of failing when the database has neither composerHeaders nor the older composer list", async () => {
+    writeClaudeSession(home, { cwd: home.gitRepo("code/shop"), startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("hi")] });
+    writeCursorDatabase(home, [{ folder: home.gitRepo("code/shop"), createdAt: "2026-05-01T09:00:00.000Z", bubbles: [bubble.user("hi")] }], {
+      headers: "none",
+    });
+
+    const scan = await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(scan.exitCode, scan.stderr).toBe(0);
+    expect(scan.stderr).toMatch(/Warning: Cursor: .*composerHeaders.*please report this/);
+    expect(sessions.map((s: any) => s.harness)).toEqual(["claude-code"]);
+  });
+});
+
+describe("scan --harness", () => {
+  function writeBoth() {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("add a checkout button")] });
+    writeCursorDatabase(home, [{ folder: repo, createdAt: "2026-05-02T09:00:00.000Z", bubbles: [bubble.user("add a cart page")] }]);
+  }
+  const harnesses = async () =>
+    (await runCli(home, ["sessions", "--json"])).json().sessions.map((s: any) => s.harness).sort();
+
+  it("reads only the Harness it names", async () => {
+    writeBoth();
+
+    const scan = await runCli(home, ["scan", "--harness", "cursor", "--json"]);
+
+    expect(scan.exitCode, scan.stderr).toBe(0);
+    expect(scan.json().harnesses.map((h: any) => h.harness)).toEqual(["cursor"]);
+    expect(await harnesses()).toEqual(["cursor"]);
+  });
+
+  it("takes several Harnesses, repeated or comma-separated", async () => {
+    writeBoth();
+
+    expect((await runCli(home, ["scan", "--harness", "claude-code", "--harness", "cursor"])).exitCode).toBe(0);
+    expect(await harnesses()).toEqual(["claude-code", "cursor"]);
+    const again = await runCli(home, ["scan", "--harness", "cursor,claude-code", "--json"]);
+    expect(again.json().harnesses.map((h: any) => h.harness).sort()).toEqual(["claude-code", "cursor"]);
+  });
+
+  it("rejects a Harness sessionlore does not know", async () => {
+    const result = await runCli(home, ["scan", "--harness", "vim"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("claude-code");
+    expect(result.stderr).toContain("cursor");
+  });
 });

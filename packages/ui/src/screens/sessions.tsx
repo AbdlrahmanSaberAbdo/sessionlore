@@ -1,7 +1,7 @@
 import type { BrowseFilter, SessionList, SessionTaskView, SessionView, SessionViewMessage } from "@sessionlore/core";
 import { Fragment } from "react";
 import { FilterBar, harnessName, plural } from "../components/filters.js";
-import { Link } from "../router.js";
+import { Link, sessionPath } from "../router.js";
 
 /** Sessions, latest first, each opening the Session viewer. */
 export function SessionsScreen({ list, filter }: { list: SessionList; filter: BrowseFilter }) {
@@ -26,7 +26,7 @@ export function SessionsScreen({ list, filter }: { list: SessionList; filter: Br
               {list.sessions.map((s) => (
                 <tr key={`${s.harness}-${s.id}`}>
                   <td>
-                    <Link href={`/sessions/${encodeURIComponent(s.id)}`}>{s.startedAt.slice(0, 16).replace("T", " ")}</Link>
+                    <Link href={sessionPath(s.id)}>{s.startedAt.slice(0, 16).replace("T", " ")}</Link>
                   </td>
                   <td>{s.project?.name ?? <span className="muted">none</span>}</td>
                   <td>{harnessName(s.harness)}</td>

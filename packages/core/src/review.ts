@@ -19,10 +19,10 @@ export interface ReviewQueue {
   suggestions: ReviewQueueItem[];
 }
 
-/** A piece of Evidence with the Session viewer path that shows it. */
+/** A piece of Evidence with where the Session viewer shows it. */
 export interface ReviewEvidence extends Evidence {
-  /** `/sessions/<id>`, ending in `#task-<n>` when the Task is still in that Session. */
-  link: string;
+  /** The Task's position in its Session (`session.id`), or null when the Session no longer has that Task. */
+  taskPosition: number | null;
 }
 
 /** One Suggestion with everything needed to decide on it. */

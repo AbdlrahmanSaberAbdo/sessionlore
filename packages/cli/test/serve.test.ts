@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
 import { runCli } from "./support/harness.js";
 
+/** These tests run real servers (and the demo a full scripted Analysis), so they get more than the default 5s. */
+const SLOW = 30_000;
+
 let home: FixtureHome;
 
 beforeEach(() => {
@@ -22,7 +25,7 @@ async function startServe(args: string[] = []) {
   return { url, stop: async () => (stop.abort(), run) };
 }
 
-describe("serve", () => {
+describe("serve", { timeout: SLOW }, () => {
   it("serves the dashboard on localhost only, opens the browser on it, and stops cleanly when interrupted", async () => {
     writeClaudeSession(home, { cwd: home.gitRepo("code/shop"), startedAt: "2026-05-04T09:00:00.000Z", turns: [turn.user("hi")] });
     expect((await runCli(home, ["scan"])).exitCode).toBe(0);

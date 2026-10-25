@@ -1,7 +1,7 @@
 import { generateText, NoObjectGeneratedError, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import { redact } from "./redact.js";
-import { MalformedReplyError, type Intent, type TokenCount } from "./tasks.js";
+import { estimateRequest, MalformedReplyError, type Intent, type TokenCount } from "./tasks.js";
 
 /**
  * Writing Suggestions with the strong model. The result is the format-neutral
@@ -70,6 +70,20 @@ export function skillPrompt(workflow: WorkflowForSkill): string {
       ? `\n<plugin-skill name="${escapeAttribute(workflow.companionOf.name)}">\n${redact(workflow.companionOf.description.slice(0, SKILL_CHARS))}\n</plugin-skill>`
       : "";
   return `<workflow name="${escapeAttribute(redact(workflow.name))}">\n${tasks.join("\n")}\n</workflow>${context}`;
+}
+
+/** Expected reply sizes: a Skill's title, trigger and up to 15 steps; a Rule's title and one line. */
+const skillReplyTokens = 500;
+const ruleReplyTokens = 100;
+
+/** The tokens writing a Skill for this Workflow is expected to use. */
+export function estimateSkill(workflow: WorkflowForSkill): TokenCount {
+  return estimateRequest(skillSystem, skillPrompt(workflow), skillReplyTokens);
+}
+
+/** The tokens writing a Rule for this Correction Cluster is expected to use. */
+export function estimateRule(cluster: CorrectionClusterForRule): TokenCount {
+  return estimateRequest(ruleSystem, rulePrompt(cluster), ruleReplyTokens);
 }
 
 /** Writes a Skill for a Workflow using `model` (the strong model). */

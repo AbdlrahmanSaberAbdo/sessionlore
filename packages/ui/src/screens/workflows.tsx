@@ -1,6 +1,6 @@
 import type { BrowseFilter, WorkflowDetail, WorkflowList, WorkflowSummary, NearWorkflowSummary } from "@sessionlore/core";
 import { FilterBar, harnessName, plural } from "../components/filters.js";
-import { filterQuery, Link } from "../router.js";
+import { filterQuery, Link, sessionPath } from "../router.js";
 
 /** Workflows and near-Workflows, with their Tasks, Sessions, Harnesses and Suggestion state. */
 export function WorkflowsScreen({ list, filter }: { list: WorkflowList; filter: BrowseFilter }) {
@@ -121,7 +121,7 @@ export function WorkflowScreen({ workflow, filter }: { workflow: WorkflowDetail;
               {workflow.tasks.map((t) => (
                 <tr key={`${t.session}-${t.position}`}>
                   <td>
-                    <Link href={`/sessions/${encodeURIComponent(t.session)}#task-${t.position}`}>{t.title}</Link>
+                    <Link href={sessionPath(t.session, t.position)}>{t.title}</Link>
                   </td>
                   <td>{t.project?.name ?? <span className="muted">none</span>}</td>
                   <td>{harnessName(t.harness)}</td>
