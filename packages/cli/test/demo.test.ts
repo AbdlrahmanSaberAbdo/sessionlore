@@ -15,6 +15,9 @@ import { fixedClock, runCli } from "./support/harness.js";
  */
 
 let root: string;
+/** These tests run real servers (and the demo a full scripted Analysis), so they get more than the default 5s. */
+const SLOW = 30_000;
+
 let home: FixtureHome;
 let demo: Demo | undefined;
 
@@ -39,7 +42,7 @@ async function get(path: string) {
   return response.json() as Promise<any>;
 }
 
-describe("the demo dataset", () => {
+describe("the demo dataset", { timeout: SLOW }, () => {
   it("has Sessions from Claude Code and Cursor, Workflows and near-Workflows", async () => {
     const overview = await get("/api/overview");
     const workflows = await get("/api/workflows");
@@ -88,7 +91,7 @@ describe("the demo dataset", () => {
   });
 });
 
-describe("sessionlore demo", () => {
+describe("sessionlore demo", { timeout: SLOW }, () => {
   /** Starts `demo`, waits until it opens the browser, and returns the URL plus a way to stop it. */
   async function startDemo() {
     const stop = new AbortController();

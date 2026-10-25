@@ -28,8 +28,11 @@ let manifest: {
 };
 
 beforeAll(() => {
-  if (!existsSync(`${packageDir}/dist/bin.js`)) {
-    execFileSync("corepack", ["pnpm", "build"], { cwd: repoRoot, stdio: "ignore" });
+  // Always built afresh: a dist left by an interrupted or earlier build may be half-written or stale.
+  // NODE_ENV is set explicitly because vitest sets it to "test", which would make Vite build the UI in development mode.
+  execFileSync("corepack", ["pnpm", "build"], { cwd: repoRoot, stdio: "ignore", env: { ...process.env, NODE_ENV: "production" } });
+  for (const built of ["dist/bin.js", "dist/ui/index.html"]) {
+    if (!existsSync(`${packageDir}/${built}`)) throw new Error(`The build did not produce ${built}`);
   }
   const [packed] = JSON.parse(
     execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: packageDir, encoding: "utf8" }),

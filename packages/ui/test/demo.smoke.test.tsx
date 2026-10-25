@@ -21,7 +21,8 @@ let demo: Demo;
 beforeAll(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "sessionlore-demo-ui-")));
   demo = await openDemo({ root, clock: { now: () => new Date("2026-06-01T12:00:00.000Z") } });
-});
+  // The demo runs a full scripted Analysis, which can take longer than the default hook timeout on a busy machine.
+}, 30_000);
 
 afterAll(() => {
   demo.close();
