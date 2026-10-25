@@ -41,6 +41,7 @@ export {
   type CorrectionsResult,
 } from "./app.js";
 export type { CorrectionsOverTime, Overview } from "./overview.js";
+export type { ReviewEvidence, ReviewQueue, ReviewQueueItem, SuggestionReview } from "./review.js";
 export type {
   BrowseFilter,
   FilterOptions,

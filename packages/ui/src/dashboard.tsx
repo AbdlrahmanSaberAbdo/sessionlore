@@ -1,8 +1,18 @@
-import type { Overview, SessionList, SessionView, WorkflowDetail, WorkflowList } from "@sessionlore/core";
-import { useEffect, type ReactNode } from "react";
-import { useApi, type Loaded } from "./api.js";
+import type {
+  AcceptResult,
+  Overview,
+  ReviewQueue,
+  SessionList,
+  SessionView,
+  SuggestionReview,
+  WorkflowDetail,
+  WorkflowList,
+} from "@sessionlore/core";
+import { useEffect, useState, type ReactNode } from "react";
+import { sendJson, useApi, type Loaded } from "./api.js";
 import { filterQuery, navigate, parseFilter, useLocation } from "./router.js";
 import { OverviewScreen } from "./screens/overview.js";
+import { ReviewQueueScreen, ReviewScreen, type ReviewActions } from "./screens/review.js";
 import { SessionScreen, SessionsScreen } from "./screens/sessions.js";
 import { WorkflowScreen, WorkflowsScreen } from "./screens/workflows.js";
 
@@ -34,6 +44,8 @@ const screens: Screen[] = [
   },
   { path: "/sessions", title: "Sessions", nav: true, render: (_, search) => <SessionsPage search={search} /> },
   { path: "/sessions/:id", title: "Session", nav: false, render: ({ id }) => <SessionPage id={id!} /> },
+  { path: "/suggestions", title: "Review", nav: true, render: () => <ReviewQueuePage /> },
+  { path: "/suggestions/:id", title: "Suggestion", nav: false, render: ({ id }) => <ReviewPage key={id} id={id!} /> },
 ];
 
 function OverviewPage() {
@@ -74,6 +86,41 @@ function SessionPage({ id }: { id: string }) {
     if (loaded.state === "ready" && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
   }, [loaded.state]);
   return <Load loaded={loaded}>{(session) => <SessionScreen session={session} />}</Load>;
+}
+
+function ReviewQueuePage() {
+  return <Load loaded={useApi<ReviewQueue>("/api/suggestions")}>{(queue) => <ReviewQueueScreen queue={queue} />}</Load>;
+}
+
+function ReviewPage({ id }: { id: string }) {
+  const path = `/api/suggestions/${encodeURIComponent(id)}`;
+  const [version, setVersion] = useState(0);
+  const [outcome, setOutcome] = useState<{ notice?: string; error?: string }>({});
+  const loaded = useApi<SuggestionReview>(path, version);
+  /** Runs one review action, then shows what it did and reloads the Suggestion. */
+  const act = (action: () => Promise<string>) => async () => {
+    try {
+      setOutcome({ notice: await action() });
+      setVersion((v) => v + 1);
+    } catch (error) {
+      setOutcome({ error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+  const actions: ReviewActions = {
+    save: (form) => act(() => sendJson("PUT", path, form).then(() => "Saved your changes."))(),
+    setScope: (choice) => act(() => sendJson("PUT", `${path}/scope`, choice).then(() => "Scope changed."))(),
+    accept: act(async () => {
+      const result = await sendJson<AcceptResult>("POST", `${path}/accept`);
+      const backedUp = result.backups.length > 0 ? ` Backed up ${result.backups.length} existing file(s); \`sessionlore restore ${id}\` puts them back.` : "";
+      return `Accepted. Wrote ${result.files.map((f) => f.path).join(", ")}.${backedUp}`;
+    }),
+    reject: act(() => sendJson("POST", `${path}/reject`).then(() => "Rejected. It won't be suggested again.")),
+  };
+  return (
+    <Load loaded={loaded}>
+      {(review) => <ReviewScreen review={review} actions={actions} notice={outcome.notice} error={outcome.error} />}
+    </Load>
+  );
 }
 
 /** Shows a loading or error state until the data is ready. */

@@ -37,11 +37,13 @@ import {
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { unifiedDiff } from "./diff.js";
+import type { ReviewQueue, SuggestionReview } from "./review.js";
 import { Overlaps, withTarget } from "./targets.js";
 import {
   defaultScope,
   evidenceFingerprint,
   regeneration,
+  RenderError,
   type Evidence,
   type InstalledContext,
   type ProjectRef,
@@ -1119,6 +1121,60 @@ export class App {
 
   getSuggestion(id: number): Suggestion | null {
     return this.store.getSuggestion(id);
+  }
+
+  /** The review queue: Pending Suggestions, oldest first. */
+  reviewQueue(): ReviewQueue {
+    return {
+      suggestions: this.listSuggestions("Pending").map((s) => ({
+        id: s.id,
+        kind: s.kind,
+        title: s.title,
+        scope: s.scope,
+        evidence: s.evidence.length,
+        target: s.target,
+        createdAt: s.createdAt,
+      })),
+    };
+  }
+
+  /**
+   * One Suggestion as the review screen shows it: for a Pending one, its
+   * editable form and what accepting would change; its Evidence with links
+   * into the Session viewer. Null when no Suggestion has that id.
+   */
+  reviewSuggestion(id: number): SuggestionReview | null {
+    const suggestion = this.store.getSuggestion(id);
+    if (!suggestion) return null;
+    const pending = suggestion.state === "Pending";
+    let changes: FileChange[] | null = null;
+    let changesError: string | null = null;
+    if (pending) {
+      try {
+        changes = this.suggestionChanges(id);
+      } catch (error) {
+        if (!(error instanceof RenderError)) throw error;
+        changesError = error.message;
+      }
+    }
+    const tasks = new Map<string, { position: number; title: string }[]>();
+    const tasksOf = (e: Evidence) => {
+      const key = `${e.session.harness}:${e.session.id}`;
+      if (!tasks.has(key)) tasks.set(key, this.store.sessionAnalysis(e.session.harness, e.session.id).tasks);
+      return tasks.get(key)!;
+    };
+    return {
+      suggestion,
+      form: pending ? this.suggestionForm(id) : null,
+      changes,
+      changesError,
+      evidence: suggestion.evidence.map((e) => {
+        const task = tasksOf(e).find((t) => t.title === e.task.title);
+        const link = `/sessions/${encodeURIComponent(e.session.id)}${task ? `#task-${task.position}` : ""}`;
+        return { ...e, link };
+      }),
+      projects: filterOptions(this.listSessions()).projects,
+    };
   }
 
   /** The files accepting a Pending Suggestion would write, without writing them. */

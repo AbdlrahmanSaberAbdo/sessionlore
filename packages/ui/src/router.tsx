@@ -58,3 +58,8 @@ export function filterQuery(filter: BrowseFilter): string {
   const query = params.toString();
   return query ? `?${query}` : "";
 }
+
+/** The review screen of one Suggestion. */
+export function suggestionPath(id: number): string {
+  return `/suggestions/${id}`;
+}
