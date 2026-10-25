@@ -172,10 +172,10 @@ describe("one Suggestion in review", () => {
     expect(review.changes[0].after).toContain("1. Create a migration file in db/migrations.\n");
     expect(review.changesError).toBeNull();
     // The first Session's migration Task is its second Task.
-    expect(review.evidence.map((e: any) => [e.task.title, e.link])).toEqual([
-      ["write a database migration for orders", `/sessions/${sessions[0]!.id}#task-1`],
-      ["add a database migration for users", `/sessions/${sessions[1]!.id}#task-0`],
-      ["database migration for the cart table", `/sessions/${sessions[2]!.id}#task-0`],
+    expect(review.evidence.map((e: any) => [e.task.title, e.session.id, e.taskPosition])).toEqual([
+      ["write a database migration for orders", sessions[0]!.id, 1],
+      ["add a database migration for users", sessions[1]!.id, 0],
+      ["database migration for the cart table", sessions[2]!.id, 0],
     ]);
   });
 

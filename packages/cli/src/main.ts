@@ -9,7 +9,6 @@ import {
   configPath,
   dataDir,
   loadConfig,
-  RenderError,
   storePath,
   type Suggestion,
   type Adapter,
@@ -531,15 +530,7 @@ const DEFAULT_PORT = 4848;
 /** The diff accepting a Suggestion with a Target would make; null without a Target or when it can't be rendered. */
 function targetDiff(app: App, suggestion: Suggestion): string | null {
   if (!suggestion.target) return null;
-  try {
-    return app
-      .suggestionChanges(suggestion.id)
-      .map((c) => c.diff)
-      .join("");
-  } catch (error) {
-    if (error instanceof RenderError) return null;
-    throw error;
-  }
+  return app.reviewSuggestion(suggestion.id)?.changes?.map((c) => c.diff).join("") ?? null;
 }
 
 function indent(text: string, prefix: string): string {

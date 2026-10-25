@@ -1377,8 +1377,8 @@ export class App {
 
   /**
    * One Suggestion as the review screen shows it: for a Pending one, its
-   * editable form and what accepting would change; its Evidence with links
-   * into the Session viewer. Null when no Suggestion has that id.
+   * editable form and what accepting would change; its Evidence with the
+   * Task each is in the Session viewer. Null when no Suggestion has that id.
    */
   reviewSuggestion(id: number): SuggestionReview | null {
     const suggestion = this.store.getSuggestion(id);
@@ -1407,8 +1407,7 @@ export class App {
       changesError,
       evidence: suggestion.evidence.map((e) => {
         const task = tasksOf(e).find((t) => t.title === e.task.title);
-        const link = `/sessions/${encodeURIComponent(e.session.id)}${task ? `#task-${task.position}` : ""}`;
-        return { ...e, link };
+        return { ...e, taskPosition: task?.position ?? null };
       }),
       projects: filterOptions(this.listSessions()).projects,
     };
