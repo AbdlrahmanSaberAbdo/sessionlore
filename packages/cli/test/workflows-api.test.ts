@@ -109,6 +109,8 @@ describe("workflows API", () => {
           { name: "blog", path: home.gitRepo("code/blog") },
         ],
         suggestion: null,
+        // One Correction across the three Tasks.
+        correctionsPerTask: 0.33,
       },
     ]);
     expect(result.nearWorkflows).toEqual([
@@ -191,6 +193,10 @@ describe("workflow API", () => {
 
     expect(workflow.tasks.map((t: any) => t.title)).toEqual(["database migration for the cart table"]);
     expect(workflow.sessions).toBe(1);
+    expect(workflow.correctionsPerTask).toEqual({
+      overall: 0,
+      byMonth: [{ month: "2026-05", tasks: 1, corrections: 0, correctionsPerTask: 0 }],
+    });
   });
 
   it("answers 404 for a Workflow that does not exist", async () => {

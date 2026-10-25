@@ -202,6 +202,42 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE suggestion_evidence ADD COLUMN correction_at TEXT;
     `,
   },
+  {
+    version: 10,
+    name: "skill uses",
+    sql: `
+      -- Skills the agent loaded in a Session, read by Scan; matched to Accepted Suggestions when shown.
+      CREATE TABLE skill_uses (
+        id          INTEGER PRIMARY KEY,
+        session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        position    INTEGER NOT NULL,
+        name        TEXT NOT NULL,
+        base_dir    TEXT,
+        used_at     TEXT NOT NULL,
+        UNIQUE (session_id, position)
+      );
+      CREATE INDEX skill_uses_name ON skill_uses (name);
+    `,
+  },
+  {
+    version: 11,
+    name: "suggestion edits, Scope overrides and fingerprints",
+    sql: `
+      -- Set when the person edited the Suggestion's content.
+      ALTER TABLE suggestions ADD COLUMN edited_at TEXT;
+      -- 1 when the person chose the Scope instead of keeping the default.
+      ALTER TABLE suggestions ADD COLUMN scope_overridden INTEGER NOT NULL DEFAULT 0;
+      -- JSON array of keys for the Tasks (or Corrections) it was derived from, so a later suggest can tell
+      -- whether its source changed without relying on cluster ids. Same keys as evidenceFingerprint().
+      ALTER TABLE suggestions ADD COLUMN fingerprint TEXT NOT NULL DEFAULT '[]';
+      UPDATE suggestions SET fingerprint = (
+        SELECT json_group_array(
+                 e.harness || ':' || e.session_id || ':' ||
+                 CASE WHEN e.correction_at IS NULL THEN e.task_at ELSE 'correction:' || e.correction_at END)
+          FROM (SELECT * FROM suggestion_evidence WHERE suggestion_id = suggestions.id ORDER BY position) e
+      );
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

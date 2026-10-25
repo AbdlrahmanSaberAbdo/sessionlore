@@ -1,6 +1,7 @@
 import type { Intent, RepeatRule } from "@sessionlore/analysis";
 import type { HarnessId } from "./adapter.js";
 import type { ClusterTask, StoredMessage, StoredSession } from "./store/store.js";
+import type { CorrectionsPerTask } from "./measuring.js";
 import type { ProjectRef, SuggestionState } from "./suggestion.js";
 
 /**
@@ -40,6 +41,8 @@ export interface WorkflowSummary {
   projects: ProjectRef[];
   /** Its latest Suggestion, if it has one. */
   suggestion: SuggestionRef | null;
+  /** Averaged over the Tasks within the filter. */
+  correctionsPerTask: number | null;
 }
 
 export interface NearWorkflowSummary extends WorkflowSummary {
@@ -61,6 +64,8 @@ export interface WorkflowDetail {
   /** False for a near-Workflow. */
   passesRepeatRule: boolean;
   tasks: ClusterTask[];
+  /** Over the Tasks within the filter. */
+  correctionsPerTask: CorrectionsPerTask;
   sessions: number;
   harnesses: HarnessId[];
   suggestions: (SuggestionRef & { title: string })[];

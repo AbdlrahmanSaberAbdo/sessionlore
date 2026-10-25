@@ -40,6 +40,7 @@ function WorkflowTable({ workflows, query }: { workflows: (WorkflowSummary | Nea
           <th>Tasks</th>
           <th>Sessions</th>
           <th>Harnesses</th>
+          <th title="Corrections per Task">Corr./Task</th>
           <th>Suggestion</th>
         </tr>
       </thead>
@@ -54,12 +55,17 @@ function WorkflowTable({ workflows, query }: { workflows: (WorkflowSummary | Nea
             <td>{plural(w.tasks, "Task")}</td>
             <td>{plural(w.sessions, "Session")}</td>
             <td>{w.harnesses.map(harnessName).join(", ")}</td>
+            <td>{perTask(w.correctionsPerTask)}</td>
             <td>{w.suggestion ? <span className={`state ${w.suggestion.state.toLowerCase()}`}>{w.suggestion.state}</span> : <span className="muted">None</span>}</td>
           </tr>
         ))}
       </tbody>
     </table>
   );
+}
+
+function perTask(value: number | null): string {
+  return value === null ? "–" : value.toFixed(2);
 }
 
 function needsText(needs: NearWorkflowSummary["needs"]): string {
@@ -80,7 +86,8 @@ export function WorkflowScreen({ workflow, filter }: { workflow: WorkflowDetail;
       <h1>{workflow.name}</h1>
       <p className="muted">
         {workflow.passesRepeatRule ? "Workflow" : "Near-Workflow"} · {plural(workflow.tasks.length, "Task")} in{" "}
-        {plural(workflow.sessions, "Session")} · {workflow.harnesses.map(harnessName).join(", ")}
+        {plural(workflow.sessions, "Session")} · {workflow.harnesses.map(harnessName).join(", ")} ·{" "}
+        {perTask(workflow.correctionsPerTask.overall)} Corrections per Task
       </p>
       <FilterBar filter={filter} options={workflow.filters} />
       {workflow.suggestions.length > 0 ? (
@@ -106,6 +113,7 @@ export function WorkflowScreen({ workflow, filter }: { workflow: WorkflowDetail;
                 <th>Task</th>
                 <th>Project</th>
                 <th>Harness</th>
+                <th>Corrections</th>
                 <th>Started</th>
               </tr>
             </thead>
@@ -117,6 +125,7 @@ export function WorkflowScreen({ workflow, filter }: { workflow: WorkflowDetail;
                   </td>
                   <td>{t.project?.name ?? <span className="muted">none</span>}</td>
                   <td>{harnessName(t.harness)}</td>
+                  <td>{t.corrections}</td>
                   <td>{t.at.slice(0, 10)}</td>
                 </tr>
               ))}

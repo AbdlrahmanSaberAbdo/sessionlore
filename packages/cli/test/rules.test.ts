@@ -279,3 +279,47 @@ describe("accept a Rule", () => {
     );
   });
 });
+
+describe("editing, re-scoping and suggesting Rules again", () => {
+  it("edits a Rule's text, and changes its Scope to User scope", async () => {
+    pnpmCorrectionsIn(home.gitRepo("code/shop"));
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const edited = await runCli(home, ["edit", String(id)], {
+      ...opts,
+      editor: (text) => {
+        expect(JSON.parse(text)).toEqual(pnpmRule);
+        return JSON.stringify({ title: "pnpm only", rule: "Always use pnpm." });
+      },
+    });
+    const scoped = await runCli(home, ["scope", String(id), "user"], opts);
+
+    expect(edited.exitCode, edited.stderr).toBe(0);
+    expect(scoped.exitCode, scoped.stderr).toBe(0);
+    expect((await review())[0]).toMatchObject({ id, title: "pnpm only", rule: "Always use pnpm.", scope: { kind: "user" } });
+  });
+
+  it("writes no new Rule for an unchanged Correction Cluster, and replaces a Pending one after several new Corrections", async () => {
+    const shop = home.gitRepo("code/shop");
+    pnpmCorrectionsIn(shop);
+    let rule: object = pnpmRule;
+    const opts = options(modelProvider(() => rule));
+    await analyze(opts);
+    const [first] = (await suggest(opts)).created;
+    expect(await suggest(opts)).toMatchObject({ created: [], replaced: [] });
+
+    session(shop, "2026-05-27T09:00:00.000Z", "add a script", "no, pnpm run it");
+    session(shop, "2026-05-28T09:00:00.000Z", "add a dependency", "no, install it with pnpm");
+    await analyze(opts);
+    rule = { title: "Use pnpm", rule: "Use pnpm for every install and script." };
+    const again = await suggest(opts);
+
+    expect(again.replaced).toEqual([first]);
+    const [suggestion, ...others] = await review();
+    expect(others).toEqual([]);
+    expect(suggestion).toMatchObject({ id: again.created[0], rule: "Use pnpm for every install and script." });
+    expect(suggestion.evidence).toHaveLength(5);
+  });
+});

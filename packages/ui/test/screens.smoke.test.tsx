@@ -45,6 +45,7 @@ const workflows: WorkflowList = {
       harnesses: ["claude-code", "cursor"],
       projects: [{ name: "shop", path: "/code/shop" }],
       suggestion: { id: 2, state: "Pending" },
+      correctionsPerTask: 1.25,
     },
   ],
   nearWorkflows: [
@@ -56,6 +57,7 @@ const workflows: WorkflowList = {
       harnesses: ["claude-code"],
       projects: [],
       suggestion: null,
+      correctionsPerTask: null,
       needs: { tasks: 1, sessions: 0 },
     },
   ],
@@ -74,8 +76,10 @@ const workflow: WorkflowDetail = {
       harness: "claude-code",
       project: { name: "shop", path: "/code/shop" },
       at: "2026-05-04T09:00:00.000Z",
+      corrections: 2,
     },
   ],
+  correctionsPerTask: { overall: 2, byMonth: [{ month: "2026-05", tasks: 1, corrections: 2, correctionsPerTask: 2 }] },
   sessions: 1,
   harnesses: ["claude-code"],
   suggestions: [{ id: 2, state: "Pending", title: "Write a database migration" }],
@@ -112,7 +116,7 @@ describe("UI screens", () => {
   it("Workflows lists Workflows and near-Workflows with counts, Harnesses, Suggestion state and filters", () => {
     const html = renderToStaticMarkup(<WorkflowsScreen list={workflows} filter={{ harness: "cursor" }} />);
 
-    for (const text of ["Write database migrations", "7 Tasks", "5 Sessions", "Cursor", "Pending", "Update release notes", "needs 1 more Task"]) {
+    for (const text of ["Write database migrations", "1.25", "7 Tasks", "5 Sessions", "Cursor", "Pending", "Update release notes", "needs 1 more Task"]) {
       expect(html).toContain(text);
     }
     expect(html).toContain('href="/workflows/4?harness=cursor"');
@@ -126,6 +130,7 @@ describe("UI screens", () => {
     expect(html).toContain("write a migration for orders");
     expect(html).toContain('href="/sessions/sess-1#task-0"');
     expect(html).toContain("Write a database migration");
+    expect(html).toContain("2.00 Corrections per Task");
   });
 
   it("Sessions lists Sessions linking to the viewer, with filters", () => {
