@@ -14,8 +14,9 @@ export class FixtureHome {
     this.path = path;
   }
 
-  static create(prefix = "sessionlore-home-"): FixtureHome {
-    return new FixtureHome(realpathSync(mkdtempSync(join(tmpdir(), prefix))));
+  /** A new, empty home directory in `parent` (the system's temp folder by default). */
+  static create(prefix = "sessionlore-home-", parent = tmpdir()): FixtureHome {
+    return new FixtureHome(realpathSync(mkdtempSync(join(parent, prefix))));
   }
 
   /** Absolute path of `relPath` inside the home directory. */

@@ -9,6 +9,7 @@ export {
   type ClaudeSessionSpec,
   type WrittenClaudeSession,
 } from "./claude-code.js";
+export { demoTopics, demoTopic, writeDemoHarnessData, DEMO_CLAUDE_MD, type DemoTopic } from "./demo.js";
 export {
   bubble,
   writeCursorDatabase,
