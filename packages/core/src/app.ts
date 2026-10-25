@@ -48,7 +48,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { basename, dirname } from "node:path";
 import { unifiedDiff } from "./diff.js";
 import type { ReviewQueue, SuggestionReview } from "./review.js";
-import { Overlaps, withTarget } from "./targets.js";
+import { Overlaps, targetWithin, withTarget } from "./targets.js";
 import {
   defaultScope,
   evidenceFingerprint,
@@ -312,6 +312,12 @@ function readText(path: string): string | null {
 
 /** The Scope the person picks for a Suggestion: User scope, or Project scope by a folder inside the Project. */
 export type ScopeChoice = { kind: "user" } | { kind: "project"; folder?: string };
+
+/** A re-scoped Suggestion, and the Target it no longer updates because that lives outside the new Scope. */
+export interface ScopeResult {
+  suggestion: Suggestion;
+  droppedTarget: Target | null;
+}
 
 /**
  * Whether a source with this Evidence needs a Suggestion written (see
@@ -1228,7 +1234,7 @@ export class App {
             title: skill.title,
             trigger: skill.trigger,
             steps: skill.steps,
-            ...withTarget(plan.next.write, plan.target),
+            ...withTarget(plan.next.write, plan.target, this.deps.harnessContext.homeDir),
             companionOf: plan.plugin,
             createdAt: this.deps.clock.now(),
           });
@@ -1241,7 +1247,7 @@ export class App {
             correctionCluster: { id: plan.cluster.id, name: plan.cluster.name },
             title: rule.title,
             rule: rule.rule,
-            ...withTarget(plan.next.write, plan.target),
+            ...withTarget(plan.next.write, plan.target, this.deps.harnessContext.homeDir),
             createdAt: this.deps.clock.now(),
           });
         }
@@ -1496,9 +1502,10 @@ export class App {
   /**
    * Overrides where a Pending Suggestion will be installed. Project scope takes
    * a folder inside the Project; without one, the single Project its Evidence
-   * comes from.
+   * comes from. A Target outside the new Scope is dropped, so the Suggestion
+   * installs there as a new Skill or Rule instead of updating it.
    */
-  setScope(id: number, choice: ScopeChoice): Suggestion {
+  setScope(id: number, choice: ScopeChoice): ScopeResult {
     const suggestion = this.pendingSuggestion(id, "re-scoped");
     let scope: Scope;
     if (choice.kind === "user") scope = { kind: "user" };
@@ -1514,8 +1521,10 @@ export class App {
       }
       scope = fromEvidence;
     }
-    this.store.overrideScope(id, scope);
-    return this.store.getSuggestion(id)!;
+    const { target } = suggestion;
+    const keep = target !== null && targetWithin(target, scope, this.deps.harnessContext.homeDir);
+    this.store.overrideScope(id, scope, keep ? target : null);
+    return { suggestion: this.store.getSuggestion(id)!, droppedTarget: target && !keep ? target : null };
   }
 
   /** Marks a Pending Suggestion Rejected; it stays in the store so it isn't proposed again. */

@@ -1,4 +1,4 @@
-import { sep } from "node:path";
+import { join, sep } from "node:path";
 import type { Embedder } from "./ports.js";
 import type {
   Evidence,
@@ -84,12 +84,27 @@ export class Overlaps {
   }
 }
 
-/** The kind-independent fields of a new Suggestion with its Target, installed where the Target lives. */
+/**
+ * Whether a Target lives in `scope`: inside the Project's folder, or in the
+ * User scope's `~/.claude`. A Suggestion only updates a Target in its own Scope.
+ */
+export function targetWithin(target: Target, scope: Scope, homeDir: string): boolean {
+  const root = scope.kind === "project" ? scope.project.path : join(homeDir, ".claude");
+  return target.path.startsWith(root + sep);
+}
+
+/**
+ * The kind-independent fields of a new Suggestion with its Target, installed
+ * where the Target lives. A Scope the person chose stays, and then a Target
+ * outside it is dropped: the Suggestion becomes a new Skill or Rule there.
+ */
 export function withTarget<T extends { scope: Scope; scopeOverridden?: boolean; evidence: readonly Evidence[] }>(
   write: T,
   target: Target | null,
+  homeDir: string,
 ): T & { target: Target | null } {
-  if (!target || write.scopeOverridden) return { ...write, target };
+  if (!target) return { ...write, target };
+  if (write.scopeOverridden) return { ...write, target: targetWithin(target, write.scope, homeDir) ? target : null };
   const project = evidenceProjects(write.evidence).find((p) => target.path.startsWith(p.path + sep));
   const scope: Scope = project ? { kind: "project", project } : { kind: "user" };
   return { ...write, scope, target };

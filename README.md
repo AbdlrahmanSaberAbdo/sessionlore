@@ -107,7 +107,7 @@ npx sessionlore reject <id>    # drop it; it won't be proposed again
 npx sessionlore restore <id>   # undo an accept, putting back any file it overwrote
 ```
 
-Skills are written to `.claude/skills/<name>/SKILL.md` and rules to `CLAUDE.md`, in the project or in `~/.claude`, depending on the draft's scope. Nothing is written until you accept.
+Skills are written to `.claude/skills/<name>/SKILL.md` and rules to `CLAUDE.md`, in the project or in `~/.claude`, depending on the draft's scope. Nothing is written until you accept. A draft that updates an existing skill or rule updates it where it is; moving such a draft to another scope with `scope` makes it a new skill or rule there instead, and `scope` says so.
 
 `npx sessionlore stats` shows how often accepted skills get used afterwards.
 

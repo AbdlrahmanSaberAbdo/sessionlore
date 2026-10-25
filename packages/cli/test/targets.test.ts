@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
 import { topicEmbedder } from "./support/embedder.js";
+import { openApi } from "./support/api.js";
 import { snapshotTree } from "./support/files.js";
 import { fixedClock, runCli, type RunOptions } from "./support/harness.js";
 import { scriptedModelProvider } from "./support/model-provider.js";
@@ -199,6 +200,59 @@ describe("an owned Skill that overlaps a Workflow", () => {
     const [suggestion] = await review();
     expect(suggestion.target).toEqual({ kind: "skill", path: skill, name: "db-migrations" });
     expect(suggestion.scope).toEqual({ kind: "user" });
+  });
+
+  it("is no longer the Target once the Suggestion is moved to another Scope: it installs there as a new Skill", async () => {
+    const shop = migrationWorkflow();
+    const skill = write(join(shop, ".claude", "skills", "db-migrations", "SKILL.md"), ownedSkill);
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const scoped = await runCli(home, ["scope", String(id), "user"], opts);
+    const scopedJson = (await runCli(home, ["review", "--json"], opts)).json().suggestions[0];
+
+    expect(scoped.exitCode, scoped.stderr).toBe(0);
+    expect(scoped.stdout).toContain(`no longer updates ${skill}`);
+    expect(scopedJson).toMatchObject({ target: null, scope: { kind: "user" }, diff: null });
+    const review = await runCli(home, ["review"], opts);
+    expect(review.stdout).not.toContain(`Updates ${skill}`);
+    const accepted = (await runCli(home, ["accept", String(id), "--json"], opts)).json();
+    expect(accepted.files.map((f: any) => f.path)).toEqual([home.resolve(".claude/skills/write-a-database-migration/SKILL.md")]);
+    expect(readFileSync(skill, "utf8")).toBe(ownedSkill);
+  });
+
+  it("stays the Target when the Suggestion is scoped to the Project the Target is in", async () => {
+    const shop = migrationWorkflow();
+    const skill = write(join(shop, ".claude", "skills", "db-migrations", "SKILL.md"), ownedSkill);
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const scoped = await runCli(home, ["scope", String(id), "project", "--json"], opts);
+
+    expect(scoped.exitCode, scoped.stderr).toBe(0);
+    expect(scoped.json()).toMatchObject({ suggestion: { target: { path: skill } }, droppedTarget: null });
+  });
+
+  it("is dropped by changing the Scope through the dashboard too, and the review shows the new file", async () => {
+    const shop = migrationWorkflow();
+    write(join(shop, ".claude", "skills", "db-migrations", "SKILL.md"), ownedSkill);
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+    const api = openApi(home, opts);
+    try {
+      const scoped = await api.send("PUT", `/api/suggestions/${id}/scope`, { kind: "user" });
+      const shown = (await api.get(`/api/suggestions/${id}`)).json();
+
+      expect(scoped.json().target).toBeNull();
+      expect(shown.changes).toEqual([
+        expect.objectContaining({ path: home.resolve(".claude/skills/write-a-database-migration/SKILL.md"), before: null }),
+      ]);
+    } finally {
+      api.close();
+    }
   });
 });
 

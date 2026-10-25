@@ -36,6 +36,7 @@ export {
   SuggestionEditError,
   type SuggestionForm,
   type ScopeChoice,
+  type ScopeResult,
   type CorrectionClusterView,
   type NearCorrectionClusterView,
   type CorrectionsResult,

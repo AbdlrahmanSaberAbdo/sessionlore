@@ -1055,13 +1055,14 @@ export class Store {
     );
   }
 
-  /** Sets the Scope the person chose for a Suggestion. */
-  overrideScope(id: number, scope: Scope): void {
+  /** Sets the Scope the person chose for a Suggestion, and the Target it keeps (null for none). */
+  overrideScope(id: number, scope: Scope, target: Target | null): void {
     this.db.run(
-      "UPDATE suggestions SET scope_kind = ?, scope_root = ?, scope_name = ?, scope_overridden = 1 WHERE id = ?",
+      "UPDATE suggestions SET scope_kind = ?, scope_root = ?, scope_name = ?, scope_overridden = 1, target = ? WHERE id = ?",
       scope.kind,
       scope.kind === "project" ? scope.project.path : null,
       scope.kind === "project" ? scope.project.name : null,
+      target ? JSON.stringify(target) : null,
       id,
     );
   }

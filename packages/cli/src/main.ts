@@ -362,9 +362,14 @@ const commands: Record<string, Command> = {
       if (kind !== "user" && kind !== "project") {
         throw new Error("Which Scope? Usage: sessionlore scope <id> user, or sessionlore scope <id> project [folder]");
       }
-      const suggestion = app.setScope(id, kind === "user" ? { kind } : { kind, folder: folder && resolve(folder) });
-      if (json) return out(JSON.stringify({ suggestion }, null, 2) + "\n");
+      const result = app.setScope(id, kind === "user" ? { kind } : { kind, folder: folder && resolve(folder) });
+      if (json) return out(JSON.stringify(result, null, 2) + "\n");
+      const { suggestion, droppedTarget } = result;
       out(`#${suggestion.id} ${suggestion.title} will install in ${scopeLabel(suggestion.scope)}.\n`);
+      if (droppedTarget) {
+        const what = suggestion.kind === "skill" ? "a new Skill" : "a new Rule";
+        out(`It no longer updates ${droppedTarget.path}, which is outside that Scope; accepting it adds ${what} there instead.\n`);
+      }
     },
   },
   corrections: {
