@@ -24,7 +24,7 @@ import type {
  * Part of every change marker, so Sessions are read again after a sessionlore
  * update changes what this Adapter reads from them. Bump it when that happens.
  */
-const READER_VERSION = "claude-code-reader-4";
+const READER_VERSION = "claude-code-reader-5";
 
 export const claudeCodeAdapter: Adapter = {
   harness: "claude-code",
@@ -384,6 +384,10 @@ const HARNESS_TEXT_PREFIXES = [
   "Another Claude session sent a message",
 ];
 
+/** The wrapper Claude Code writes when the person runs a slash command, and the arguments they typed after it. */
+const SLASH_COMMAND = /^<command-(name|message|args)>/;
+const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
+
 /** Blocks Claude Code or an IDE inserts around what the person typed. */
 const INJECTED_BLOCKS = /<(system-reminder|ide_opened_file|ide_selection|ide_diagnostics)>[\s\S]*?<\/\1>/g;
 
@@ -411,7 +415,10 @@ function typedUserText(record: JsonRecord): string | null {
     return null;
   }
 
-  if (HARNESS_TEXT_PREFIXES.some((prefix) => raw.trimStart().startsWith(prefix))) return null;
+  // A slash command: the text typed after the command is the person's; its name and wrapper are not.
+  const commandArgs = SLASH_COMMAND.test(raw.trimStart()) ? COMMAND_ARGS.exec(raw) : null;
+  if (commandArgs) raw = commandArgs[1]!;
+  else if (HARNESS_TEXT_PREFIXES.some((prefix) => raw.trimStart().startsWith(prefix))) return null;
   const text = raw.replace(INJECTED_BLOCKS, "").trim();
   return text.length > 0 ? text : null;
 }

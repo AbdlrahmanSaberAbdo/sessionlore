@@ -80,7 +80,7 @@ describe("scan of Claude Code Sessions: the tricky cases", () => {
       cwd: repo,
       startedAt: "2026-05-01T09:00:00.000Z",
       turns: [
-        turn.command("review", "src/cart.ts"),
+        turn.command("review"),
         turn.meta("Base directory for this skill: /home/me/.claude/skills/review\n\nReview the file."),
         turn.assistant("The cart looks fine."),
         turn.user("<system-reminder>The user opened src/cart.ts</system-reminder>\nwhy is the total off by a cent?"),
@@ -97,6 +97,28 @@ describe("scan of Claude Code Sessions: the tricky cases", () => {
     const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
 
     expect(sessions[0].userMessageCount).toBe(1);
+  });
+
+  it("keeps the text typed after a slash command as a User Message, without the command's name or wrapper", async () => {
+    const written = writeClaudeSession(home, {
+      cwd: home.gitRepo("code/shop"),
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [
+        turn.command("review", "check the rounding in src/cart.ts"),
+        turn.assistant("The cart looks fine."),
+        turn.command("compact"),
+        turn.user("thanks"),
+      ],
+    });
+
+    await runCli(home, ["scan"]);
+    const shown = (await runCli(home, ["session", written.id, "--json"])).json().session;
+
+    expect(shown.userMessageCount).toBe(2);
+    expect(shown.messages.filter((m: any) => m.role === "user").map((m: any) => m.text)).toEqual([
+      "check the rounding in src/cart.ts",
+      "thanks",
+    ]);
   });
 
   it("follows the message tree, leaving out branches the conversation abandoned", async () => {
