@@ -23,7 +23,7 @@ Needs Node.js 22.13 or newer. Every command below also takes `--json` for machin
 npx sessionlore demo
 ```
 
-Opens the dashboard on a made-up history. It needs no Model Provider, downloads nothing, and never reads or writes your own sessions or store. Add `--no-open` to only print the address, or `--port N` to pick the port (default 4848). Press Ctrl-C to stop it.
+Opens the dashboard on a made-up history. It needs no Model Provider, downloads nothing, and never reads or writes your own sessions or store. Add `--no-open` to only print the address, `--port N` to pick the port (default 4848), or `--json` to print the address and a summary of the made-up dataset as JSON. Press Ctrl-C to stop it.
 
 ### 2. Scan your sessions
 

@@ -402,12 +402,14 @@ const commands: Record<string, Command> = {
   },
   serve: {
     summary: "Open the dashboard in your browser, served on localhost only",
-    async run({ app, serve, signal, out }) {
-      const server = await listen(createServer({ app, uiDir: serve.uiDir }), { port: serve.port });
-      out(`sessionlore dashboard: ${server.url}\nPress Ctrl-C to stop.\n`);
-      if (serve.open) serve.openBrowser?.(server.url);
-      await stopped(signal);
-      await server.close();
+    async run({ app, json, serve, signal, out, err }) {
+      await serveDashboard(
+        app,
+        serve,
+        signal,
+        (url) => (json ? out(JSON.stringify({ url }, null, 2) + "\n") : out(`sessionlore dashboard: ${url}\n`)),
+        json ? err : out,
+      );
     },
   },
   stats: {
@@ -441,25 +443,32 @@ const commands: Record<string, Command> = {
 
 interface StandaloneContext {
   clock: Clock;
+  json: boolean;
   /** Folder `demo` creates its throwaway home directory in. */
   demoRoot: string;
   signal?: AbortSignal;
   serve: CommandContext["serve"];
   out(text: string): void;
+  err(text: string): void;
 }
 
 /** Commands that never open the person's own store or config. */
 const standaloneCommands: Record<string, { summary: string; run(ctx: StandaloneContext): Promise<void> }> = {
   demo: {
     summary: "Open the dashboard on a made-up history; needs no Model Provider and never touches your own store",
-    async run({ clock, demoRoot, signal, serve, out }) {
+    async run({ clock, demoRoot, json, signal, serve, out, err }) {
       const demo = await openDemo({ root: demoRoot, clock });
       try {
-        const server = await listen(createServer({ app: demo.app, uiDir: serve.uiDir }), { port: serve.port });
-        out(`sessionlore demo dashboard (made-up Sessions, kept apart from your own): ${server.url}\nPress Ctrl-C to stop.\n`);
-        if (serve.open) serve.openBrowser?.(server.url);
-        await stopped(signal);
-        await server.close();
+        await serveDashboard(
+          demo.app,
+          serve,
+          signal,
+          (url) =>
+            json
+              ? out(JSON.stringify({ url, dataset: demoSummary(demo.app) }, null, 2) + "\n")
+              : out(`sessionlore demo dashboard (made-up Sessions, kept apart from your own): ${url}\n`),
+          json ? err : out,
+        );
       } finally {
         demo.close();
       }
@@ -469,6 +478,39 @@ const standaloneCommands: Record<string, { summary: string; run(ctx: StandaloneC
 
 function scopeLabel(scope: Scope): string {
   return scope.kind === "project" ? `Project scope (${scope.project.name})` : "User scope";
+}
+
+/**
+ * Serves the dashboard for `app` until the person interrupts, announcing its
+ * address with `announce` and how to stop it with `say`, and opening the browser unless told not to.
+ */
+async function serveDashboard(
+  app: App,
+  serve: CommandContext["serve"],
+  signal: AbortSignal | undefined,
+  announce: (url: string) => void,
+  say: (text: string) => void,
+): Promise<void> {
+  const server = await listen(createServer({ app, uiDir: serve.uiDir }), { port: serve.port });
+  announce(server.url);
+  say("Press Ctrl-C to stop.\n");
+  if (serve.open) serve.openBrowser?.(server.url);
+  await stopped(signal);
+  await server.close();
+}
+
+/** What the demo dataset holds, as `demo --json` reports it. */
+function demoSummary(app: App) {
+  const overview = app.overview();
+  return {
+    sessions: overview.counts.sessions,
+    tasks: overview.counts.tasks,
+    harnesses: [...new Set(app.listSessions().map((s) => s.harness))].sort(),
+    workflows: overview.counts.workflows,
+    nearWorkflows: app.listWorkflows().nearWorkflows.length,
+    correctionClusters: app.listCorrections().correctionClusters.length,
+    pendingSuggestions: app.listSuggestions("Pending").length,
+  };
 }
 
 /** Resolves once the person interrupts (Ctrl-C), at once if they already have. */
@@ -661,7 +703,15 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
   const serve = { port, open: !parsed.values["no-open"], openBrowser: io.openBrowser, uiDir: io.uiDir };
   if (standalone) {
     try {
-      await standalone.run({ clock: io.clock, demoRoot: io.demoRoot ?? tmpdir(), signal: io.signal, serve, out: io.stdout });
+      await standalone.run({
+        clock: io.clock,
+        json: parsed.values.json ?? false,
+        demoRoot: io.demoRoot ?? tmpdir(),
+        signal: io.signal,
+        serve,
+        out: io.stdout,
+        err: io.stderr,
+      });
       return 0;
     } catch (error) {
       io.stderr(`sessionlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);

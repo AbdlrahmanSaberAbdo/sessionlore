@@ -93,11 +93,11 @@ describe("the demo dataset", { timeout: SLOW }, () => {
 
 describe("sessionlore demo", { timeout: SLOW }, () => {
   /** Starts `demo`, waits until it opens the browser, and returns the URL plus a way to stop it. */
-  async function startDemo() {
+  async function startDemo(args: string[] = []) {
     const stop = new AbortController();
     let opened!: (url: string) => void;
     const browserUrl = new Promise<string>((resolve) => (opened = resolve));
-    const run = runCli(home, ["demo", "--port", "0"], { signal: stop.signal, openBrowser: opened, demoRoot: root });
+    const run = runCli(home, ["demo", "--port", "0", ...args], { signal: stop.signal, openBrowser: opened, demoRoot: root });
     const url = await Promise.race([browserUrl, run.then((r) => Promise.reject(new Error(`demo exited early: ${r.stderr}`)))]);
     return { url, stop: async () => (stop.abort(), run) };
   }
@@ -114,6 +114,20 @@ describe("sessionlore demo", { timeout: SLOW }, () => {
     expect(overview.counts.workflows).toBeGreaterThanOrEqual(2);
     expect(snapshotTree(home.path)).toEqual(before);
     expect(readdirSync(root)).toEqual([]);
+  });
+
+  it("prints the dashboard's address and a summary of the dataset as JSON with --json", async () => {
+    const running = await startDemo(["--json"]);
+    const result = await running.stop();
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    const printed = result.json();
+    expect(printed.url).toBe(running.url);
+    expect(printed.dataset.sessions).toBeGreaterThanOrEqual(8);
+    expect(printed.dataset.workflows).toBeGreaterThanOrEqual(2);
+    expect(printed.dataset.correctionClusters).toBeGreaterThanOrEqual(1);
+    expect(printed.dataset.pendingSuggestions).toBe(3);
+    expect(printed.dataset.harnesses).toEqual(["claude-code", "cursor"]);
   });
 
   it("never mixes with the person's real store", async () => {
