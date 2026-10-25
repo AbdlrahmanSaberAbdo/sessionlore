@@ -48,6 +48,7 @@ import {
   type RenderContext,
   type RenderedFile,
   type Renderer,
+  type SkillSuggestion,
   type Suggestion,
   type SuggestionState,
 } from "./suggestion.js";
@@ -843,7 +844,7 @@ export class App {
   mindMap(filter: BrowseFilter = {}): MindMap {
     const allSessions = this.listSessions();
     const sessions = new Map(allSessions.map((s) => [`${s.harness}:${s.id}`, s]));
-    const suggestions = this.store.listSuggestions().filter((s) => s.kind === "skill" && s.workflow);
+    const suggestions = this.store.listSuggestions().filter((s): s is SkillSuggestion => s.kind === "skill");
     const nodes = new Map<string, MindMapNode>();
     const edges = new Map<string, MindMapEdge>();
     const link = (source: string, target: string) => {
@@ -910,7 +911,7 @@ export class App {
         });
         link(taskId, sessionId);
       }
-      for (const s of suggestions.filter((s) => s.workflow!.id === workflow.id)) {
+      for (const s of suggestions.filter((s) => s.workflow?.id === workflow.id)) {
         const suggestionId = `suggestion:${s.id}`;
         add({ id: suggestionId, kind: "suggestion", label: s.title, harnesses, suggestion: s.id, state: s.state });
         link(workflowId, suggestionId);

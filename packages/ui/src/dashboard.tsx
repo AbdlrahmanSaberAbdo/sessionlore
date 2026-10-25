@@ -1,7 +1,8 @@
-import type { Overview, SessionList, SessionView, WorkflowDetail, WorkflowList } from "@sessionlore/core";
+import type { MindMap, Overview, SessionList, SessionView, WorkflowDetail, WorkflowList } from "@sessionlore/core";
 import { useEffect, type ReactNode } from "react";
 import { useApi, type Loaded } from "./api.js";
 import { filterQuery, navigate, parseFilter, useLocation } from "./router.js";
+import { MindMapScreen } from "./screens/mind-map.js";
 import { OverviewScreen } from "./screens/overview.js";
 import { SessionScreen, SessionsScreen } from "./screens/sessions.js";
 import { WorkflowScreen, WorkflowsScreen } from "./screens/workflows.js";
@@ -33,6 +34,7 @@ const screens: Screen[] = [
     render: ({ id }, search) => <WorkflowPage id={id!} search={search} />,
   },
   { path: "/sessions", title: "Sessions", nav: true, render: (_, search) => <SessionsPage search={search} /> },
+  { path: "/mind-map", title: "Mind map", nav: true, render: (_, search) => <MindMapPage search={search} /> },
   { path: "/sessions/:id", title: "Session", nav: false, render: ({ id }) => <SessionPage id={id!} /> },
 ];
 
@@ -63,6 +65,16 @@ function SessionsPage({ search }: { search: string }) {
   return (
     <Load loaded={useApi<SessionList>(`/api/sessions${filterQuery(filter)}`)}>
       {(list) => <SessionsScreen list={list} filter={filter} />}
+    </Load>
+  );
+}
+
+function MindMapPage({ search }: { search: string }) {
+  const filter = parseFilter(search);
+  return (
+    <Load loaded={useApi<MindMap>(`/api/mind-map${filterQuery(filter)}`)}>
+      {/* Keyed by the filter so a new map starts with its own collapse state. */}
+      {(map) => <MindMapScreen key={search} map={map} filter={filter} />}
     </Load>
   );
 }
