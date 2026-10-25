@@ -241,7 +241,7 @@ describe("accept a Rule", () => {
     session(shop, "2026-05-26T09:00:00.000Z", "format the file", "no, indent with tabs");
     session(shop, "2026-05-27T09:00:00.000Z", "add a helper", "no, tabs not spaces", "no, tabs please");
     const file = join(shop, "CLAUDE.md");
-    writeFileSync(file, "# Shop\n\nRun tests with `pnpm test`.\n");
+    writeFileSync(file, "# Shop\n\nRun tests with `make test`.\n");
     const opts = options(
       modelProvider((request) =>
         request.includes("tabs") ? { title: "Indent with tabs", rule: "Indent with tabs, not spaces." } : pnpmRule,
@@ -262,7 +262,7 @@ describe("accept a Rule", () => {
       [
         "# Shop",
         "",
-        "Run tests with `pnpm test`.",
+        "Run tests with `make test`.",
         "",
         "<!-- sessionlore:rules:start -->",
         "## Rules from sessionlore",
