@@ -462,6 +462,7 @@ export class App {
     this.store.removeSessionsUnless((project) => this.projectFilter.allows(project));
     const counts = new Map<Adapter, { added: number; updated: number; unchanged: number }>();
     const unrecognized = new Map<Adapter, Map<string, number>>();
+    const warnings = new Map<Adapter, string[]>();
     const found: { adapter: Adapter; source: SessionSource }[] = [];
     const adapters = this.deps.adapters.filter((a) => !options.harnesses || options.harnesses.includes(a.harness));
     for (const adapter of adapters) {
@@ -469,8 +470,10 @@ export class App {
       if (storages.length === 0) continue; // this Harness has no data on this machine
       counts.set(adapter, { added: 0, updated: 0, unchanged: 0 });
       unrecognized.set(adapter, new Map());
+      const warned: string[] = [];
+      warnings.set(adapter, warned);
       for (const storage of storages) {
-        for await (const source of adapter.listSessions(storage)) found.push({ adapter, source });
+        for await (const source of adapter.listSessions(storage, (text) => warned.push(text))) found.push({ adapter, source });
       }
     }
     const selected =
@@ -510,7 +513,7 @@ export class App {
         harness: adapter.harness,
         name: adapter.displayName,
         ...count,
-        warnings: unrecognizedWarnings(adapter, unrecognized.get(adapter)!),
+        warnings: [...warnings.get(adapter)!, ...unrecognizedWarnings(adapter, unrecognized.get(adapter)!)],
       })),
     };
   }

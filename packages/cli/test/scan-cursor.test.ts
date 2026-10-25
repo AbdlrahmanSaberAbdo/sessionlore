@@ -245,6 +245,56 @@ describe("scan of Cursor Sessions", () => {
 
     expect(sessions[0].project).toEqual({ name: "my shop", path: repo });
   });
+
+  it("finds the Project of a Session in a multi-root workspace from the folders its .code-workspace file lists", async () => {
+    const repo = home.gitRepo("code/shop");
+    const docs = home.gitRepo("code/shop-docs");
+    writeCursorDatabase(home, [
+      {
+        folder: repo,
+        workspaceMapping: "code-workspace",
+        workspaceFolders: [repo, docs],
+        createdAt: "2026-05-01T09:00:00.000Z",
+        bubbles: [bubble.user("hi")],
+      },
+    ]);
+
+    const scan = await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(scan.stderr).toBe("");
+    expect(sessions[0].project).toEqual({ name: "shop", path: repo });
+  });
+
+  it("reads Sessions from the older composer list, with a warning, when the database has no composerHeaders table", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeCursorDatabase(
+      home,
+      [{ id: "old-composer", folder: repo, createdAt: "2026-05-01T09:00:00.000Z", bubbles: [bubble.user("add a cart"), bubble.assistant("Added.")] }],
+      { headers: "legacy" },
+    );
+
+    const scan = await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(scan.exitCode, scan.stderr).toBe(0);
+    expect(scan.stderr).toMatch(/Warning: Cursor: .*composerHeaders/);
+    expect(sessions.map((s: any) => [s.id, s.userMessageCount, s.project])).toEqual([["old-composer", 1, { name: "shop", path: repo }]]);
+  });
+
+  it("warns instead of failing when the database has neither composerHeaders nor the older composer list", async () => {
+    writeClaudeSession(home, { cwd: home.gitRepo("code/shop"), startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("hi")] });
+    writeCursorDatabase(home, [{ folder: home.gitRepo("code/shop"), createdAt: "2026-05-01T09:00:00.000Z", bubbles: [bubble.user("hi")] }], {
+      headers: "none",
+    });
+
+    const scan = await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(scan.exitCode, scan.stderr).toBe(0);
+    expect(scan.stderr).toMatch(/Warning: Cursor: .*composerHeaders.*please report this/);
+    expect(sessions.map((s: any) => s.harness)).toEqual(["claude-code"]);
+  });
 });
 
 describe("scan --harness", () => {
