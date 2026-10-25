@@ -1,0 +1,185 @@
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { claudeProjectsDir, FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { runCli } from "./support/harness.js";
+
+let home: FixtureHome;
+
+beforeEach(() => {
+  home = FixtureHome.create();
+});
+
+afterEach(() => {
+  home.remove();
+});
+
+describe("scan of Claude Code Sessions", () => {
+  it("stores Sessions so that `sessions --json` lists them", async () => {
+    const repo = home.gitRepo("code/shop");
+    const session = writeClaudeSession(home, {
+      cwd: repo,
+      startedAt: "2026-05-01T09:00:00.000Z",
+      stepSeconds: 60,
+      turns: [
+        turn.user("add a checkout button"),
+        turn.assistant("Added it."),
+        turn.user("no, use the shared Button component"),
+        turn.assistant("Switched to the shared Button."),
+      ],
+    });
+
+    const scan = await runCli(home, ["scan"]);
+    expect(scan.exitCode).toBe(0);
+
+    const list = await runCli(home, ["sessions", "--json"]);
+    expect(list.exitCode).toBe(0);
+    expect(list.json()).toEqual({
+      sessions: [
+        {
+          id: session.id,
+          harness: "claude-code",
+          project: { name: "shop", path: repo },
+          startedAt: "2026-05-01T09:00:00.000Z",
+          endedAt: "2026-05-01T09:03:00.000Z",
+          model: "claude-sonnet-4-5-20250929",
+          userMessageCount: 2,
+          assistantTurnCount: 2,
+          subagentRunCount: 0,
+          tokens: { input: 20, output: 40, cacheCreation: 0, cacheRead: 0 },
+        },
+      ],
+    });
+  });
+
+  it("gives Sessions from different worktrees of one repository the same Project", async () => {
+    const repo = home.gitRepo("code/shop");
+    const worktree = home.gitWorktree(repo, "code/shop-worktrees/feature-x");
+    const subfolder = home.folder("code/shop/packages/api");
+    for (const cwd of [repo, worktree, subfolder]) {
+      writeClaudeSession(home, { cwd, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("hi")] });
+    }
+
+    await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(sessions.map((s: any) => s.project)).toEqual([
+      { name: "shop", path: repo },
+      { name: "shop", path: repo },
+      { name: "shop", path: repo },
+    ]);
+  });
+
+  it("makes a folder outside git its own Project", async () => {
+    const scratch = home.folder("scratch/notes");
+    writeClaudeSession(home, { cwd: scratch, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("hi")] });
+
+    await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(sessions[0].project).toEqual({ name: "notes", path: scratch });
+  });
+
+  it("never writes to Harness storage", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("one")] });
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-02T09:00:00.000Z", turns: [turn.user("two")] });
+    const before = snapshotTree(claudeProjectsDir(home));
+
+    expect((await runCli(home, ["scan"])).exitCode).toBe(0);
+
+    expect(snapshotTree(claudeProjectsDir(home))).toEqual(before);
+  });
+
+  it("prints how many Sessions were added per Harness", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("one")] });
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-02T09:00:00.000Z", turns: [turn.user("two")] });
+
+    const first = await runCli(home, ["scan"]);
+    expect(first.stdout).toContain("Reading all your Sessions (read-only)\n");
+    expect(first.stdout).toMatch(/^ {2}Claude Code +~\/\.claude\/projects +2 Sessions, 2 new$/m);
+
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-03T09:00:00.000Z", turns: [turn.user("three")] });
+    const second = await runCli(home, ["scan", "--json"]);
+    expect(second.json()).toEqual({
+      harnesses: [{ harness: "claude-code", name: "Claude Code", locations: [claudeProjectsDir(home)], added: 1, updated: 0, unchanged: 2, warnings: [] }],
+    });
+  });
+
+  it("names the limits it read within: --since, --last and --harness", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-01T09:00:00.000Z", turns: [turn.user("one")] });
+    writeClaudeSession(home, { cwd: repo, startedAt: "2026-05-02T09:00:00.000Z", turns: [turn.user("two")] });
+
+    const dated = await runCli(home, ["scan", "--since", "2026-04-01", "--last", "1", "--harness", "claude-code"]);
+    const relative = await runCli(home, ["scan", "--since", "6w"]);
+
+    expect(dated.stdout).toContain("Reading the most recent of your Claude Code Sessions active since 2026-04-01 (read-only)\n");
+    expect(dated.stdout).toMatch(/^ {2}Claude Code +~\/\.claude\/projects +1 Session, 1 new$/m);
+    expect(relative.stdout).toContain("Reading your Sessions from the last 6 weeks (read-only)\n");
+    expect(relative.stdout).toMatch(/^ {2}Claude Code +~\/\.claude\/projects +2 Sessions, 1 new$/m);
+  });
+
+  it("says so when no supported Harness has data on this machine", async () => {
+    const result = await runCli(home, ["scan"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("No Claude Code or Cursor Sessions found");
+  });
+
+  it("does not count tool results or Harness-injected text as User Messages", async () => {
+    const repo = home.gitRepo("code/shop");
+    writeClaudeSession(home, {
+      cwd: repo,
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [
+        turn.meta("Caveat: the messages below were generated by the user while running local commands."),
+        turn.user("run the tests"),
+        turn.tool("Bash", { command: "pnpm test" }, "3 passed"),
+        turn.assistant("All 3 tests pass."),
+      ],
+    });
+
+    await runCli(home, ["scan"]);
+    const { sessions } = (await runCli(home, ["sessions", "--json"])).json();
+
+    expect(sessions[0].userMessageCount).toBe(1);
+  });
+});
+
+describe("local store", () => {
+  it("lives in a sessionlore folder in the home directory, created on first run", async () => {
+    expect(existsSync(home.resolve(".sessionlore"))).toBe(false);
+
+    const result = await runCli(home, ["sessions", "--json"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.json()).toEqual({ sessions: [] });
+    expect(existsSync(home.resolve(".sessionlore/sessionlore.db"))).toBe(true);
+  });
+});
+
+describe("Node version check", () => {
+  it("refuses to run on Node older than 22, naming the required version", async () => {
+    const result = await runCli(home, ["scan"], { nodeVersion: "20.11.1" });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/requires Node\.js 22\.\d+\.\d+ or newer/);
+    expect(result.stderr).toContain("20.11.1");
+    expect(existsSync(home.resolve(".sessionlore"))).toBe(false);
+  });
+});
+
+/** Every file under `dir` with its content hash and modification time. */
+function snapshotTree(dir: string): Record<string, string> {
+  const snapshot: Record<string, string> = {};
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    const path = join(entry.parentPath, entry.name);
+    const info = statSync(path);
+    snapshot[path] = entry.isFile()
+      ? `${createHash("sha256").update(readFileSync(path)).digest("hex")}:${info.mtimeMs}`
+      : `dir:${info.mtimeMs}`;
+  }
+  return snapshot;
+}
