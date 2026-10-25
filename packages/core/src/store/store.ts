@@ -186,6 +186,8 @@ export interface SaveSessionInput {
   session: HarnessSession;
   project: ResolvedProject | null;
   fingerprint: string;
+  /** What Analysis would send for the Session's User Messages; see `analysisFingerprint`. */
+  contentFingerprint: string;
   scanId: number;
 }
 
@@ -225,20 +227,22 @@ export class Store {
 
   /** Stores a Session read by a Scan. Returns whether it was new to the store. */
   saveSession(input: SaveSessionInput): { added: boolean } {
-    const { harness, session, project, fingerprint, scanId } = input;
+    const { harness, session, project, fingerprint, contentFingerprint, scanId } = input;
     return this.db.transaction(() => {
       const projectId = project ? this.projectId(project) : null;
-      const existing = this.db.get<{ id: number }>(
-        "SELECT id FROM sessions WHERE harness = ? AND external_id = ?",
+      const existing = this.db.get<{ id: number; content_fingerprint: string | null }>(
+        "SELECT id, content_fingerprint FROM sessions WHERE harness = ? AND external_id = ?",
         harness,
         session.externalId,
       );
       let sessionId: number;
+      // The same User Messages as before keep their Analysis (Tasks, Intents, Clusters); only their timestamps are refreshed.
+      const sameUserMessages = existing?.content_fingerprint === contentFingerprint;
       if (existing) {
         sessionId = existing.id;
         this.db.run(
           `UPDATE sessions SET project_id = ?, cwd = ?, started_at = ?, ended_at = ?,
-             scan_fingerprint = ?, last_scan_id = ?, assistant_turn_count = ?, subagent_run_count = ?,
+             scan_fingerprint = ?, content_fingerprint = ?, last_scan_id = ?, assistant_turn_count = ?, subagent_run_count = ?,
              input_tokens = ?, output_tokens = ?, cache_creation_tokens = ?, cache_read_tokens = ?, model = ?
            WHERE id = ?`,
           projectId,
@@ -246,20 +250,24 @@ export class Store {
           session.startedAt.toISOString(),
           session.endedAt.toISOString(),
           fingerprint,
+          contentFingerprint,
           scanId,
           ...summaryValues(session),
           session.model ?? null,
           sessionId,
         );
-        this.db.run("DELETE FROM user_messages WHERE session_id = ?", sessionId);
+        if (!sameUserMessages) {
+          this.db.run("DELETE FROM user_messages WHERE session_id = ?", sessionId);
+          this.db.run("DELETE FROM tasks WHERE session_id = ?", sessionId);
+        }
         this.db.run("DELETE FROM messages WHERE session_id = ?", sessionId);
-        this.db.run("DELETE FROM tasks WHERE session_id = ?", sessionId);
         this.db.run("DELETE FROM skill_uses WHERE session_id = ?", sessionId);
       } else {
         sessionId = this.db.run(
-          `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, scan_fingerprint, last_scan_id,
-             assistant_turn_count, subagent_run_count, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, model)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO sessions (harness, external_id, project_id, cwd, started_at, ended_at, scan_fingerprint, content_fingerprint,
+             last_scan_id, assistant_turn_count, subagent_run_count, input_tokens, output_tokens, cache_creation_tokens,
+             cache_read_tokens, model)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           harness,
           session.externalId,
           projectId,
@@ -267,19 +275,29 @@ export class Store {
           session.startedAt.toISOString(),
           session.endedAt.toISOString(),
           fingerprint,
+          contentFingerprint,
           scanId,
           ...summaryValues(session),
           session.model ?? null,
         ).lastInsertRowid;
       }
       session.userMessages.forEach((message, position) => {
-        this.db.run(
-          "INSERT INTO user_messages (session_id, position, text, timestamp) VALUES (?, ?, ?, ?)",
-          sessionId,
-          position,
-          message.text,
-          message.timestamp.toISOString(),
-        );
+        if (sameUserMessages) {
+          this.db.run(
+            "UPDATE user_messages SET timestamp = ? WHERE session_id = ? AND position = ?",
+            message.timestamp.toISOString(),
+            sessionId,
+            position,
+          );
+        } else {
+          this.db.run(
+            "INSERT INTO user_messages (session_id, position, text, timestamp) VALUES (?, ?, ?, ?)",
+            sessionId,
+            position,
+            message.text,
+            message.timestamp.toISOString(),
+          );
+        }
       });
       (session.messages ?? []).forEach((message, position) => this.insertMessage(sessionId, position, message));
       (session.skillUses ?? []).forEach((use, position) => {
@@ -404,11 +422,28 @@ export class Store {
     );
   }
 
-  /** Sessions never analyzed, or changed since their last Analysis. */
+  /** Sessions never analyzed, or whose User Messages changed since their last Analysis. */
   sessionsToAnalyze(): SessionToAnalyze[] {
-    return this.sessionsWithMessages(
-      "WHERE s.analyzed_fingerprint IS NULL OR s.analyzed_fingerprint <> s.scan_fingerprint",
+    return this.sessionsWithMessages("WHERE s.analyzed_fingerprint IS NOT s.content_fingerprint");
+  }
+
+  /**
+   * Fills in the content fingerprint of Sessions stored before it existed. One
+   * whose Analysis was of its current content (the old scheme recorded the
+   * change marker it was analyzed at) keeps that Analysis.
+   */
+  backfillContentFingerprints(fingerprint: (userMessages: string[]) => string): void {
+    const rows = this.db.all<{ id: number; scan_fingerprint: string; analyzed_fingerprint: string | null }>(
+      "SELECT id, scan_fingerprint, analyzed_fingerprint FROM sessions WHERE content_fingerprint IS NULL",
     );
+    if (rows.length === 0) return;
+    this.db.transaction(() => {
+      for (const row of rows) {
+        const content = fingerprint(this.userMessageTexts(row.id));
+        const analyzed = row.analyzed_fingerprint === row.scan_fingerprint ? content : row.analyzed_fingerprint;
+        this.db.run("UPDATE sessions SET content_fingerprint = ?, analyzed_fingerprint = ? WHERE id = ?", content, analyzed, row.id);
+      }
+    });
   }
 
   /** A stored Session with its User Messages, or null if no Session has that id. */
@@ -420,11 +455,11 @@ export class Store {
     const sessions = this.db.all<{
       id: number;
       external_id: string;
-      scan_fingerprint: string;
+      content_fingerprint: string;
       project_name: string | null;
       project_root: string | null;
     }>(
-      `SELECT s.id, s.external_id, s.scan_fingerprint, p.name AS project_name, p.root AS project_root
+      `SELECT s.id, s.external_id, s.content_fingerprint, p.name AS project_name, p.root AS project_root
          FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
         ${where}
         ORDER BY s.started_at, s.id`,
@@ -433,7 +468,7 @@ export class Store {
     return sessions.map((s) => ({
       key: s.id,
       id: s.external_id,
-      fingerprint: s.scan_fingerprint,
+      fingerprint: s.content_fingerprint,
       project: s.project_root && s.project_name ? { root: s.project_root, name: s.project_name } : null,
       userMessages: this.userMessageTexts(s.id),
     }));

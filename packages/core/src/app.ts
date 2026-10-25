@@ -3,6 +3,7 @@ import type { Clock, Embedder, ModelProvider } from "./ports.js";
 import { ProjectFilter } from "./project-filter.js";
 import { resolveProject } from "./project.js";
 import {
+  analysisFingerprint,
   applyRepeatRule,
   defaultRepeatRule,
   estimateTaskSplit,
@@ -397,7 +398,9 @@ export class App {
   ) {}
 
   static open(deps: AppDependencies): App {
-    return new App(deps, Store.open(deps.storePath));
+    const store = Store.open(deps.storePath);
+    store.backfillContentFingerprints(analysisFingerprint);
+    return new App(deps, store);
   }
 
   private get projectFilter(): ProjectFilter {
@@ -449,6 +452,7 @@ export class App {
         session,
         project,
         fingerprint: source.changeMarker,
+        contentFingerprint: analysisFingerprint(session.userMessages.map((m) => m.text)),
         scanId,
       });
       if (result.added) count.added += 1;

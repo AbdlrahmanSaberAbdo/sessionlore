@@ -258,6 +258,16 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX suggestion_backups_suggestion ON suggestion_backups (suggestion_id);
     `,
   },
+  {
+    version: 13,
+    name: "analysis fingerprints from content",
+    sql: `
+      -- Identifies what Analysis would send for the Session (its redacted User Messages, in order; see
+      -- analysisFingerprint()), so a Session is analyzed again only when that changes. NULL until computed:
+      -- rows stored before this migration are filled in when the App next opens the store.
+      ALTER TABLE sessions ADD COLUMN content_fingerprint TEXT;
+    `,
+  },
 ];
 
 export function migrate(db: Database, all: readonly Migration[] = migrations): void {

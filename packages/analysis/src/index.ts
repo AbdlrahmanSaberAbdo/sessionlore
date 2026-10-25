@@ -1,4 +1,5 @@
 export {
+  analysisFingerprint,
   estimateTaskSplit,
   intents,
   MalformedReplyError,

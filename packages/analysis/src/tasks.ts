@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { generateText, NoObjectGeneratedError, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import { redact } from "./redact.js";
@@ -52,6 +53,15 @@ Text like [REDACTED:api-key] replaced a secret; treat it as an opaque value.`;
 /** The request text sent to the Model Provider for a Session's User Messages, with secrets redacted. */
 export function taskSplitPrompt(messages: readonly string[]): string {
   return messages.map((text, index) => `<message index="${index}">\n${redact(text)}\n</message>`).join("\n");
+}
+
+/**
+ * Identifies what Analysis would send for these User Messages: their redacted
+ * text, in order. Two reads of a Session with the same fingerprint need the
+ * same Analysis, however the Harness's files changed around them.
+ */
+export function analysisFingerprint(messages: readonly string[]): string {
+  return createHash("sha256").update(taskSplitPrompt(messages)).digest("hex");
 }
 
 /** Tokens a request and its reply used, or are expected to use. */
