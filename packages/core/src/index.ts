@@ -39,6 +39,19 @@ export {
   type CorrectionsResult,
 } from "./app.js";
 export type { CorrectionsOverTime, Overview } from "./overview.js";
+export type {
+  BrowseFilter,
+  FilterOptions,
+  NearWorkflowSummary,
+  SessionList,
+  SessionTaskView,
+  SessionView,
+  SessionViewMessage,
+  SuggestionRef,
+  WorkflowDetail,
+  WorkflowList,
+  WorkflowSummary,
+} from "./browse.js";
 export {
   defaultScope,
   evidenceFingerprint,
