@@ -152,3 +152,141 @@ code {
   gap: 12px;
   padding: 4px 0;
 }
+
+.small {
+  font-size: 0.85em;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.filters select,
+.filters input {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+a {
+  color: var(--accent);
+}
+
+table.list {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.list th,
+table.list td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+table.list th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.85em;
+}
+
+.state {
+  font-size: 0.85em;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.state.accepted {
+  color: var(--accent);
+}
+
+.state.rejected {
+  color: var(--muted);
+}
+
+ul.plain {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-boundary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: baseline;
+  margin-top: 16px;
+  padding: 6px 0;
+  border-top: 2px solid var(--accent);
+  scroll-margin-top: 16px;
+}
+
+.task-title {
+  font-weight: 600;
+}
+
+.correction-count,
+.correction-label {
+  color: var(--bar);
+}
+
+.message {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.message.user {
+  border-left: 3px solid var(--accent);
+}
+
+.message.correction {
+  border-left-color: var(--bar);
+  background: color-mix(in srgb, var(--bar) 10%, var(--surface));
+}
+
+.message.tool {
+  padding: 2px 12px;
+  background: transparent;
+  border-style: dashed;
+  font-size: 0.85em;
+}
+
+.message .who {
+  display: flex;
+  gap: 8px;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+
+.message .intent {
+  font-weight: 600;
+}
+
+.message .text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

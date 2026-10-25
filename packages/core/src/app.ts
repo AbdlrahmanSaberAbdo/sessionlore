@@ -21,6 +21,19 @@ import {
   type TokenCount,
 } from "@sessionlore/analysis";
 import { correctionsPerWeek, TOP_WORKFLOWS, type Overview } from "./overview.js";
+import {
+  distinct,
+  filterOptions,
+  matchesFilter,
+  type BrowseFilter,
+  type SessionList,
+  type SessionView,
+  type SessionViewMessage,
+  type SuggestionRef,
+  type WorkflowDetail,
+  type WorkflowList,
+  type WorkflowSummary,
+} from "./browse.js";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { unifiedDiff } from "./diff.js";
@@ -50,6 +63,7 @@ import {
   type PriorSuggestionRow,
   type SessionTasks,
   type StoredCluster,
+  type StoredMessage,
   type StoredSession,
   type StoredSessionDetail,
 } from "./store/store.js";
@@ -741,6 +755,123 @@ export class App {
     return result;
   }
 
+  /**
+   * Workflows and near-Workflows for the Workflows screen. Whether a Cluster
+   * is a Workflow is decided on all its Tasks; the filter only narrows which
+   * Tasks are counted and shown, and a Workflow with none left is left out.
+   */
+  browseWorkflows(filter: BrowseFilter = {}): WorkflowList {
+    const { repeatRule, workflows, nearWorkflows } = this.listWorkflows();
+    const suggestions = this.latestSuggestions();
+    const summarize = (view: ClusterView): WorkflowSummary | null => {
+      const tasks = view.tasks.filter((t) => matchesFilter(filter, t));
+      if (tasks.length === 0) return null;
+      const suggestion = suggestions.get(view.id);
+      return {
+        id: view.id,
+        name: view.name,
+        tasks: tasks.length,
+        sessions: new Set(tasks.map((t) => t.session)).size,
+        harnesses: distinct(tasks.map((t) => t.harness), (h) => h),
+        projects: distinct(
+          tasks.flatMap((t) => (t.project ? [{ name: t.project.name, path: t.project.path }] : [])),
+          (p) => p.path,
+        ),
+        suggestion: suggestion ? { id: suggestion.id, state: suggestion.state } : null,
+        correctionsPerTask: correctionsPerTask(tasks).overall,
+      };
+    };
+    return {
+      repeatRule,
+      workflows: workflows.flatMap((w) => summarize(w) ?? []),
+      nearWorkflows: nearWorkflows.flatMap((w) => {
+        const summary = summarize(w);
+        return summary ? [{ ...summary, needs: w.needs }] : [];
+      }),
+      filters: filterOptions(this.listSessions()),
+    };
+  }
+
+  /**
+   * One Cluster for the Workflows screen, with its Tasks within the filter and
+   * all its Suggestions. Null as for `getWorkflow`.
+   */
+  browseWorkflow(id: number, filter: BrowseFilter = {}): WorkflowDetail | null {
+    const judged = this.judgedCluster(id);
+    if (!judged) return null;
+    const { view, verdict } = judged;
+    const tasks = view.tasks.filter((t) => matchesFilter(filter, t));
+    return {
+      id: view.id,
+      name: view.name,
+      passesRepeatRule: verdict.passes,
+      tasks,
+      correctionsPerTask: correctionsPerTask(tasks),
+      sessions: new Set(tasks.map((t) => t.session)).size,
+      harnesses: distinct(tasks.map((t) => t.harness), (h) => h),
+      suggestions: this.store
+        .listSuggestions()
+        .filter((s) => s.kind === "skill" && s.workflow?.id === view.id)
+        .map((s) => ({ id: s.id, state: s.state, title: s.title })),
+      filters: filterOptions(this.listSessions()),
+    };
+  }
+
+  /** Sessions for the Session list, latest first, narrowed by the filter (by when they started). */
+  browseSessions(filter: BrowseFilter = {}): SessionList {
+    const sessions = this.listSessions();
+    return {
+      sessions: sessions.filter((s) => matchesFilter(filter, { ...s, at: s.startedAt })),
+      filters: filterOptions(sessions),
+    };
+  }
+
+  /**
+   * One Session for the Session viewer: every message, each in the Task it
+   * belongs to, with User Messages' Intents so Corrections can be marked.
+   * Null if no Session has that id or its Project is excluded.
+   */
+  viewSession(id: string): SessionView | null {
+    const session = this.getSession(id);
+    if (!session) return null;
+    const { messages, ...rest } = session;
+    const analysis = this.store.sessionAnalysis(session.harness, session.id);
+    const { workflows, nearWorkflows } = this.listWorkflows();
+    const shown = new Map([...workflows, ...nearWorkflows].map((w) => [w.id, { id: w.id, name: w.name }]));
+
+    // A Harness whose Adapter does not read every message still has its User Messages.
+    const stored: StoredMessage[] =
+      messages.length > 0 ? messages : analysis.userMessages.map((m) => ({ role: "user", text: m.text, timestamp: null }));
+    const pending = [...analysis.userMessages];
+    let task: number | null = null;
+    const viewed = stored.map((message): SessionViewMessage => {
+      const isUserMessage = message.role === "user" && !message.subagent && pending[0]?.text === message.text;
+      if (!isUserMessage) return { ...message, task };
+      const userMessage = pending.shift()!;
+      task = userMessage.task;
+      return userMessage.intent ? { ...message, task, intent: userMessage.intent } : { ...message, task };
+    });
+    return {
+      ...rest,
+      tasks: analysis.tasks.map((t) => ({
+        position: t.position,
+        title: t.title,
+        workflow: (t.cluster !== null && shown.get(t.cluster)) || null,
+        corrections: analysis.userMessages.filter((m) => m.task === t.position && m.intent === "Correction").length,
+      })),
+      messages: viewed,
+    };
+  }
+
+  /** Each Workflow's latest Suggestion. */
+  private latestSuggestions(): Map<number, SuggestionRef & { title: string }> {
+    const latest = new Map<number, SuggestionRef & { title: string }>();
+    for (const s of this.store.listSuggestions()) {
+      if (s.kind === "skill" && s.workflow) latest.set(s.workflow.id, { id: s.id, state: s.state, title: s.title });
+    }
+    return latest;
+  }
+
   /** Measuring numbers: how often Accepted Skills are used. */
   stats(): StatsResult {
     return { skills: this.skillUsage() };
@@ -831,9 +962,13 @@ export class App {
    * no Cluster has or had that id, or none of its Tasks may be shown.
    */
   getWorkflow(id: number): ClusterView | null {
+    return this.judgedCluster(id)?.view ?? null;
+  }
+
+  private judgedCluster(id: number): { view: ClusterView; verdict: RepeatRuleResult } | null {
     const current = this.store.resolveCluster("tasks", id);
     const cluster = current === null ? undefined : this.store.listClusters().find((c) => c.id === current);
-    return (cluster && this.clusterView(cluster, this.deps.clock.now())?.view) ?? null;
+    return (cluster && this.clusterView(cluster, this.deps.clock.now())) ?? null;
   }
 
   private clusterView(cluster: StoredCluster, now: Date): { view: ClusterView; verdict: RepeatRuleResult } | null {

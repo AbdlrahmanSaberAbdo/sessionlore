@@ -118,6 +118,32 @@ describe("scan of Claude Code Sessions: the tricky cases", () => {
 
     expect(session).toMatchObject({ userMessageCount: 2, assistantTurnCount: 2 });
   });
+
+  it("shows User Messages, assistant replies and tool calls of the active branch in order", async () => {
+    const written = writeClaudeSession(home, {
+      cwd: home.gitRepo("code/shop"),
+      startedAt: "2026-05-01T09:00:00.000Z",
+      turns: [
+        turn.user("run the tests"),
+        turn.tool("Bash", { command: "pnpm test" }, "3 passed"),
+        turn.splitAssistant(["All 3 tests pass.", "Anything else?"]),
+        turn.meta("Caveat: injected by the Harness."),
+        turn.abandoned([turn.user("delete the tests"), turn.assistant("Deleted them.")]),
+        turn.user("thanks"),
+      ],
+    });
+
+    await runCli(home, ["scan"]);
+    const shown = await runCli(home, ["session", written.id, "--json"]);
+
+    expect(shown.exitCode, shown.stderr).toBe(0);
+    expect(shown.json().session.messages.map((m: any) => [m.role, m.text ?? m.name, m.status])).toEqual([
+      ["user", "run the tests", undefined],
+      ["tool", "Bash", "completed"],
+      ["assistant", "All 3 tests pass.\n\nAnything else?", undefined],
+      ["user", "thanks", undefined],
+    ]);
+  });
 });
 
 describe("unknown storage shapes", () => {
