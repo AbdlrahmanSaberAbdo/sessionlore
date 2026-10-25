@@ -33,6 +33,9 @@ export {
   type FileChange,
   type RestoreResult,
   SuggestionStateError,
+  SuggestionEditError,
+  type SuggestionForm,
+  type ScopeChoice,
   type CorrectionClusterView,
   type NearCorrectionClusterView,
   type CorrectionsResult,
@@ -40,7 +43,11 @@ export {
 export type { CorrectionsOverTime, Overview } from "./overview.js";
 export {
   defaultScope,
+  evidenceFingerprint,
+  regeneration,
   RenderError,
+  type PriorSuggestion,
+  type Regeneration,
   suggestionStates,
   type Evidence,
   type InstalledContext,

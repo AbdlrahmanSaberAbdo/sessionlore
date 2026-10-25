@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Clock, Embedder, ModelProvider } from "@sessionlore/core";
 import type { FixtureHome } from "@sessionlore/fixtures";
@@ -24,6 +24,11 @@ export interface RunOptions {
   answers?: string[];
   /** Abort it to interrupt the command, as Ctrl-C would. */
   signal?: AbortSignal;
+  /**
+   * What the person does in their editor: given the file's text, the text they
+   * save. Omit and any command that opens an editor fails the test.
+   */
+  editor?: (text: string) => string;
   /** Called with the URL `serve` would open in the browser. */
   openBrowser?: (url: string) => void;
   /** Folder of built UI files `serve` serves. */
@@ -72,6 +77,10 @@ export async function runCli(home: FixtureHome, args: string[], options: RunOpti
     },
     ask,
     signal: options.signal,
+    editFile: async (path) => {
+      if (!options.editor) throw new Error(`The CLI opened ${path} in an editor but the test supplied no editor`);
+      writeFileSync(path, options.editor(readFileSync(path, "utf8")));
+    },
     clock: options.clock ?? fixedClock("2026-06-01T12:00:00.000Z"),
     modelProvider: options.modelProvider,
     embedder: options.embedder,

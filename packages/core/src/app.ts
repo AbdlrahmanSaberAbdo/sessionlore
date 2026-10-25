@@ -25,7 +25,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import {
   defaultScope,
+  evidenceFingerprint,
+  regeneration,
   type Evidence,
+  type Scope,
   type RenderContext,
   type RenderedFile,
   type Renderer,
@@ -39,6 +42,7 @@ import {
   type ClusterCorrection,
   type ClusterKind,
   type ClusterTask,
+  type PriorSuggestionRow,
   type SessionTasks,
   type StoredCluster,
   type StoredSession,
@@ -235,6 +239,8 @@ export interface ModelUsage {
 export interface SuggestResult {
   /** Ids of the Suggestions written. */
   created: number[];
+  /** Ids of Pending Suggestions removed because one in `created` supersedes them. */
+  replaced: number[];
   /** A Skill that failed names its Workflow; a Rule, its Correction Cluster. */
   failed: ({ workflow: number; error: string } | { correctionCluster: number; error: string })[];
   usage: ModelUsage[];
@@ -244,6 +250,63 @@ export interface SuggestResult {
 export interface AcceptResult {
   suggestion: Suggestion;
   files: RenderedFile[];
+}
+
+/** The Scope the person picks for a Suggestion: User scope, or Project scope by a folder inside the Project. */
+export type ScopeChoice = { kind: "user" } | { kind: "project"; folder?: string };
+
+/**
+ * Whether a source with this Evidence needs a Suggestion written (see
+ * `regeneration`), and if so the kind-independent fields to store with it: a
+ * replacement keeps a Scope the person chose for the one it replaces.
+ */
+function nextSuggestion(evidence: Evidence[], prior: readonly PriorSuggestionRow[]) {
+  const fingerprint = evidenceFingerprint(evidence);
+  const decision = regeneration(fingerprint, prior);
+  if (decision.action === "keep") return null;
+  const replaced = decision.action === "replace" ? prior.find((p) => p.id === decision.id) : undefined;
+  return {
+    write: {
+      scope: replaced?.scopeOverridden ? replaced.scope : defaultScope(evidence),
+      scopeOverridden: replaced?.scopeOverridden,
+      evidence,
+      fingerprint,
+      replaces: replaced?.id,
+    },
+  };
+}
+
+/** A Suggestion's editable content: `title` and its kind's fields, each text or a list of text. */
+export type SuggestionForm = { title: string; trigger?: string } & Record<string, string | string[]>;
+
+/** An edited Suggestion that can't be saved, e.g. because a field is missing or empty. */
+export class SuggestionEditError extends Error {
+  override name = "SuggestionEditError";
+}
+
+/** Checks an edited form against the current one: same fields, same types, no empty text. */
+function validateForm(current: SuggestionForm, edited: unknown): SuggestionForm {
+  if (typeof edited !== "object" || edited === null || Array.isArray(edited)) {
+    throw new SuggestionEditError("The edited Suggestion must be a JSON object.");
+  }
+  const fields = Object.keys(current);
+  const extra = Object.keys(edited).filter((k) => !fields.includes(k));
+  if (extra.length > 0) throw new SuggestionEditError(`Unknown ${extra.length === 1 ? "field" : "fields"}: ${extra.join(", ")}.`);
+  const result: Record<string, string | string[]> = {};
+  for (const field of fields) {
+    const value = (edited as Record<string, unknown>)[field];
+    if (Array.isArray(current[field])) {
+      const items = Array.isArray(value) && value.every((v) => typeof v === "string") ? value.map((v: string) => v.trim()) : null;
+      if (!items || items.length === 0 || items.some((v) => v === "")) {
+        throw new SuggestionEditError(`"${field}" must be a non-empty list of non-empty text.`);
+      }
+      result[field] = items;
+    } else {
+      if (typeof value !== "string" || value.trim() === "") throw new SuggestionEditError(`"${field}" must be non-empty text.`);
+      result[field] = value.trim();
+    }
+  }
+  return result as SuggestionForm;
 }
 
 /** A Suggestion id that doesn't exist, or a Suggestion not in a state that allows the action. */
@@ -765,24 +828,27 @@ export class App {
   }
 
   /**
-   * Writes a Skill Suggestion with the strong model for every Workflow that has
-   * no Suggestion yet. A Workflow whose Suggestion was Rejected gets none, so
-   * it isn't proposed again. Nothing is written outside the store.
+   * Writes a Skill Suggestion with the strong model for every Workflow that
+   * needs one (see `regeneration`): none yet, or a Pending one written before
+   * the Workflow gained several new Tasks, which the new one replaces. A
+   * Workflow whose Suggestion was Rejected gets none, so it isn't proposed
+   * again. Nothing is written outside the store.
    */
   async suggest(options: AnalyzeOptions = {}): Promise<SuggestResult> {
     const { signal } = options;
     const model = this.requireModelProvider().strong;
     const usage = new UsageTally(this.deps.prices);
-    const result: SuggestResult = { created: [], failed: [], usage: [] };
-    const suggested = this.store.workflowsWithSuggestions("skill");
+    const result: SuggestResult = { created: [], replaced: [], failed: [], usage: [] };
+    const prior = this.store.priorSuggestions("skill");
     for (const workflow of this.listWorkflows().workflows) {
       if (signal?.aborted) break;
-      if (suggested.has(workflow.id)) continue;
       const evidence: Evidence[] = workflow.tasks.map((t) => ({
         task: { title: t.title, at: t.at },
         session: { id: t.session, harness: t.harness },
         project: t.project,
       }));
+      const next = nextSuggestion(evidence, prior);
+      if (!next) continue;
       const tasks = workflow.tasks.map((t) => ({
         title: t.title,
         userMessages: this.store.taskMessages(t.harness, t.session, t.position),
@@ -797,11 +863,11 @@ export class App {
           title: skill.title,
           trigger: skill.trigger,
           steps: skill.steps,
-          scope: defaultScope(evidence),
-          evidence,
+          ...next.write,
           createdAt: this.deps.clock.now(),
         });
         result.created.push(id);
+        if (next.write.replaces !== undefined) result.replaced.push(next.write.replaces);
       } catch (error) {
         if (signal?.aborted) break;
         if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
@@ -813,23 +879,24 @@ export class App {
     return result;
   }
 
-  /** Writes a Rule Suggestion for every qualifying Correction Cluster that has none in any state. */
+  /** Writes a Rule Suggestion for every qualifying Correction Cluster that needs one, as `suggest` does for Workflows. */
   private async suggestRules(
     model: ModelProvider["strong"],
     usage: UsageTally,
     result: SuggestResult,
     signal: AbortSignal | undefined,
   ): Promise<void> {
-    const suggested = this.store.correctionClustersWithRules();
+    const prior = this.store.priorSuggestions("rule");
     for (const cluster of this.listCorrections().correctionClusters) {
       if (signal?.aborted) return;
-      if (suggested.has(cluster.id)) continue;
       const evidence: Evidence[] = cluster.corrections.map((c) => ({
         correction: { text: c.text, at: c.at },
         task: { title: c.task, at: c.taskAt },
         session: { id: c.session, harness: c.harness },
         project: c.project,
       }));
+      const next = nextSuggestion(evidence, prior);
+      if (!next) continue;
       try {
         const { rule, tokens } = await writeRule(
           model,
@@ -843,11 +910,11 @@ export class App {
           correctionCluster: { id: cluster.id, name: cluster.name },
           title: rule.title,
           rule: rule.rule,
-          scope: defaultScope(evidence),
-          evidence,
+          ...next.write,
           createdAt: this.deps.clock.now(),
         });
         result.created.push(id);
+        if (next.write.replaces !== undefined) result.replaced.push(next.write.replaces);
       } catch (error) {
         if (signal?.aborted) return;
         if (error instanceof MalformedReplyError) usage.add(model.modelId, error.tokens);
@@ -882,6 +949,52 @@ export class App {
     return { suggestion: this.store.getSuggestion(id)!, files };
   }
 
+  /**
+   * A Pending Suggestion's content in the format-neutral form, as the person
+   * edits it: `title` and the fields of its kind (`trigger` and `steps` for a
+   * Skill, `rule` for a Rule).
+   */
+  suggestionForm(id: number): SuggestionForm {
+    const { kind } = this.pendingSuggestion(id, "edited");
+    const { title, trigger, body } = this.store.suggestionContent(id)!;
+    return (kind === "skill" ? { title, trigger, ...body } : { title, ...body }) as SuggestionForm;
+  }
+
+  /**
+   * Saves the person's edit of a Pending Suggestion. The form must keep every
+   * field of `suggestionForm(id)` with the same type, so this works for any kind.
+   */
+  editSuggestion(id: number, form: unknown): Suggestion {
+    const { title, trigger, ...body } = validateForm(this.suggestionForm(id), form);
+    this.store.editSuggestion(id, { title, trigger: trigger ?? "", body }, this.deps.clock.now());
+    return this.store.getSuggestion(id)!;
+  }
+
+  /**
+   * Overrides where a Pending Suggestion will be installed. Project scope takes
+   * a folder inside the Project; without one, the single Project its Evidence
+   * comes from.
+   */
+  setScope(id: number, choice: ScopeChoice): Suggestion {
+    const suggestion = this.pendingSuggestion(id, "re-scoped");
+    let scope: Scope;
+    if (choice.kind === "user") scope = { kind: "user" };
+    else if (choice.folder !== undefined) {
+      const project = resolveProject(choice.folder);
+      scope = { kind: "project", project: { name: project.name, path: project.root } };
+    } else {
+      const fromEvidence = defaultScope(suggestion.evidence);
+      if (fromEvidence.kind !== "project") {
+        throw new SuggestionStateError(
+          `Suggestion ${id}'s Evidence comes from several Projects (or none); name a folder in the Project to install it in.`,
+        );
+      }
+      scope = fromEvidence;
+    }
+    this.store.overrideScope(id, scope);
+    return this.store.getSuggestion(id)!;
+  }
+
   /** Marks a Pending Suggestion Rejected; it stays in the store so it isn't proposed again. */
   rejectSuggestion(id: number): Suggestion {
     this.pendingSuggestion(id);
@@ -889,13 +1002,11 @@ export class App {
     return this.store.getSuggestion(id)!;
   }
 
-  private pendingSuggestion(id: number): Suggestion {
+  private pendingSuggestion(id: number, action = "accepted or rejected"): Suggestion {
     const suggestion = this.store.getSuggestion(id);
     if (!suggestion) throw new SuggestionStateError(`No Suggestion has id ${id}.`);
     if (suggestion.state !== "Pending") {
-      throw new SuggestionStateError(
-        `Suggestion ${id} is already ${suggestion.state}; only Pending Suggestions can be accepted or rejected.`,
-      );
+      throw new SuggestionStateError(`Suggestion ${id} is already ${suggestion.state}; only Pending Suggestions can be ${action}.`);
     }
     return suggestion;
   }

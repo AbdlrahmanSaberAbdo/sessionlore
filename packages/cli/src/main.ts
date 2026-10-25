@@ -1,9 +1,12 @@
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { allAdapters } from "@sessionlore/adapters";
 import { allRenderers } from "@sessionlore/renderers";
 import {
   App,
   configPath,
+  dataDir,
   loadConfig,
   storePath,
   type Adapter,
@@ -12,9 +15,11 @@ import {
   type Env,
   type ModelProvider,
   type Renderer,
+  type Scope,
 } from "@sessionlore/core";
 import { createServer, listen } from "@sessionlore/server";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
+import { openInEditor } from "./editor.js";
 import { unsupportedNodeMessage } from "./node-version.js";
 
 /** Everything the CLI takes from its surroundings. Seam 1 tests supply all of it. */
@@ -43,6 +48,8 @@ export interface CliEnvironment {
   uiDir?: string;
   /** Defaults to every Renderer sessionlore ships. */
   renderers?: readonly Renderer[];
+  /** Opens a file in the person's editor and resolves once they close it. Defaults to $VISUAL or $EDITOR. */
+  editFile?: (path: string) => Promise<void>;
 }
 
 interface CommandContext {
@@ -61,6 +68,10 @@ interface CommandContext {
   /** Path of the config file, for messages that tell the person what to set. */
   configFile: string;
   warn(text: string): void;
+  /** Opens a file in the person's editor and resolves once they close it. */
+  editFile(path: string): Promise<void>;
+  /** sessionlore's data folder, for scratch files such as one being edited. */
+  dataDir: string;
   /** `--last N`: limit a Scan to the N most recent Sessions. */
   last?: number;
   serve: { port: number; open: boolean; openBrowser?: (url: string) => void; uiDir?: string };
@@ -256,7 +267,7 @@ const commands: Record<string, Command> = {
       if (json) return out(JSON.stringify({ suggestions }, null, 2) + "\n");
       if (suggestions.length === 0) return out("No Pending Suggestions. Run `sessionlore suggest` to write some.\n");
       for (const s of suggestions) {
-        const scope = s.scope.kind === "project" ? `Project scope (${s.scope.project.name})` : "User scope";
+        const scope = scopeLabel(s.scope);
         out(`#${s.id}  ${s.kind === "skill" ? "Skill" : "Rule"}: ${s.title}  [${scope}]\n`);
         if (s.kind === "skill") {
           out(`  When: ${s.trigger}\n`);
@@ -271,7 +282,7 @@ const commands: Record<string, Command> = {
         }
         out("\n");
       }
-      out("Accept with `sessionlore accept <id>`, or reject with `sessionlore reject <id>`.\n");
+      out("Accept with `sessionlore accept <id>`, or reject with `sessionlore reject <id>`. Change one first with `sessionlore edit <id>` or `sessionlore scope <id> user|project`.\n");
     },
   },
   accept: {
@@ -289,6 +300,44 @@ const commands: Record<string, Command> = {
       const suggestion = app.rejectSuggestion(suggestionId(args, "reject"));
       if (json) return out(JSON.stringify({ suggestion }, null, 2) + "\n");
       out(`Rejected #${suggestion.id} ${suggestion.title}.\n`);
+    },
+  },
+  edit: {
+    summary: "Edit a Pending Suggestion in your editor before accepting it: edit <id>",
+    async run({ app, json, args, editFile, dataDir, out, err }) {
+      const id = suggestionId(args, "edit");
+      const form = app.suggestionForm(id);
+      mkdirSync(dataDir, { recursive: true });
+      const file = join(dataDir, `suggestion-${id}.json`);
+      writeFileSync(file, JSON.stringify(form, null, 2) + "\n");
+      try {
+        await editFile(file);
+        let edited: unknown;
+        try {
+          edited = JSON.parse(readFileSync(file, "utf8"));
+        } catch (error) {
+          err(`The edited Suggestion is not valid JSON (${(error as Error).message}); nothing was saved.\n`);
+          return 1;
+        }
+        const suggestion = app.editSuggestion(id, edited);
+        if (json) return out(JSON.stringify({ suggestion }, null, 2) + "\n");
+        out(`Saved #${suggestion.id} ${suggestion.title}.\n`);
+      } finally {
+        rmSync(file, { force: true });
+      }
+    },
+  },
+  scope: {
+    summary: "Change where a Pending Suggestion installs: scope <id> user | scope <id> project [folder]",
+    run({ app, json, args, out }) {
+      const id = suggestionId(args, "scope");
+      const [, kind, folder] = args;
+      if (kind !== "user" && kind !== "project") {
+        throw new Error("Which Scope? Usage: sessionlore scope <id> user, or sessionlore scope <id> project [folder]");
+      }
+      const suggestion = app.setScope(id, kind === "user" ? { kind } : { kind, folder: folder && resolve(folder) });
+      if (json) return out(JSON.stringify({ suggestion }, null, 2) + "\n");
+      out(`#${suggestion.id} ${suggestion.title} will install in ${scopeLabel(suggestion.scope)}.\n`);
     },
   },
   corrections: {
@@ -364,6 +413,10 @@ const commands: Record<string, Command> = {
     },
   },
 };
+
+function scopeLabel(scope: Scope): string {
+  return scope.kind === "project" ? `Project scope (${scope.project.name})` : "User scope";
+}
 
 /** Resolves once the person interrupts (Ctrl-C), at once if they already have. */
 function stopped(signal: AbortSignal | undefined): Promise<void> {
@@ -535,6 +588,8 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       modelProvider,
       configFile: configPath(io.homeDir),
       last,
+      editFile: io.editFile ?? ((path) => openInEditor(path, io.env)),
+      dataDir: dataDir(io.homeDir),
       serve: { port, open: !parsed.values["no-open"], openBrowser: io.openBrowser, uiDir: io.uiDir },
       out: io.stdout,
       err: io.stderr,

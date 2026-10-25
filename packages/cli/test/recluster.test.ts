@@ -189,6 +189,9 @@ describe("recluster", () => {
       { id: database.id, name: "Write database migrations" },
       { id: database.id, name: "Write database migrations" },
     ]);
+    // The merged Workflow holds no Tasks those Suggestions weren't derived from, so it needs no new one.
+    const again = await runCli(home, ["suggest", "--json"], { modelProvider, clock: now });
+    expect(again.json()).toMatchObject({ created: [], replaced: [] });
   });
 
   it("rebuilds Correction Clusters too, keeping the identity of the one each maps to", async () => {
