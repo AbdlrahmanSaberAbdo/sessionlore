@@ -107,6 +107,12 @@ describe("scan of Claude Code Sessions", () => {
     });
   });
 
+  it("says so when no supported Harness has data on this machine", async () => {
+    const result = await runCli(home, ["scan"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("No Claude Code or Cursor Sessions found");
+  });
+
   it("does not count tool results or Harness-injected text as User Messages", async () => {
     const repo = home.gitRepo("code/shop");
     writeClaudeSession(home, {

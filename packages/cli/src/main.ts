@@ -694,7 +694,13 @@ async function confirmSpend(
 }
 
 /** What a Scan read, per Harness, with any warnings. */
+const SEE_HELP = "Run `sessionlore --help` for every command and option.\n";
+
 function reportScan(result: ScanResult, out: (text: string) => void, warn: (text: string) => void): void {
+  if (result.harnesses.length === 0) {
+    out("No Claude Code or Cursor Sessions found on this machine.\n");
+    return;
+  }
   for (const warning of result.harnesses.flatMap((h) => h.warnings)) warn(`Warning: ${warning}\n`);
   for (const harness of result.harnesses) {
     out(
@@ -850,7 +856,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
   if (parsed.values.last !== undefined) {
     last = wholeNumber(parsed.values.last) ?? 0;
     if (last < 1) {
-      io.stderr(`--last takes a positive whole number of Sessions, not "${parsed.values.last}"\n\n${usage()}`);
+      io.stderr(`--last takes a positive whole number of Sessions, not "${parsed.values.last}"\n${SEE_HELP}`);
       return 2;
     }
   }
@@ -860,7 +866,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
   if (window !== undefined) {
     since = parseSince(window, io.clock.now()) ?? undefined;
     if (!since) {
-      io.stderr(`--since takes ${sinceHelp}, not "${window}"\n\n${usage()}`);
+      io.stderr(`--since takes ${sinceHelp}, not "${window}"\n${SEE_HELP}`);
       return 2;
     }
   }
@@ -871,7 +877,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     const named = parsed.values.harness.flatMap((h) => h.split(",")).map((h) => h.trim()).filter(Boolean);
     const unknown = named.filter((h) => !known.includes(h as HarnessId));
     if (named.length === 0 || unknown.length > 0) {
-      io.stderr(`--harness takes ${known.join(" or ")} (repeat it or separate them with commas), not "${unknown.join(", ")}"\n\n${usage()}`);
+      io.stderr(`--harness takes ${known.join(" or ")} (repeat it or separate them with commas), not "${unknown.join(", ")}"\n${SEE_HELP}`);
       return 2;
     }
     harnesses = named as HarnessId[];
@@ -881,7 +887,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
   if (parsed.values.port !== undefined) {
     port = wholeNumber(parsed.values.port) ?? -1;
     if (port < 0 || port > 65535) {
-      io.stderr(`--port takes a port number from 0 to 65535, not "${parsed.values.port}"\n\n${usage()}`);
+      io.stderr(`--port takes a port number from 0 to 65535, not "${parsed.values.port}"\n${SEE_HELP}`);
       return 2;
     }
   }

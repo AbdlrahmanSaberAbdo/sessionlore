@@ -33,8 +33,8 @@ Analysis and suggestions use a model you choose, with your own key. Create `~/.s
 {
   "modelProvider": {
     "provider": "anthropic",
-    "cheapModel": "claude-haiku-4-5",
-    "strongModel": "claude-sonnet-4-5",
+    "cheapModel": "claude-haiku-5-5",
+    "strongModel": "claude-sonnet-5-5",
     "apiKeyEnv": "ANTHROPIC_API_KEY"
   }
 }

@@ -26,4 +26,14 @@ describe("help", () => {
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("Usage: sessionlore <command>");
   });
+
+  it("names a bad option value with a pointer to --help instead of the whole usage", async () => {
+    for (const args of [["scan", "--since", "30x"], ["scan", "--last", "0"], ["scan", "--harness", "vim"], ["serve", "--port", "99999"]]) {
+      const result = await runCli(home, args);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain(`"${args[2]}"`);
+      expect(result.stderr).toContain("sessionlore --help");
+      expect(result.stderr).not.toContain("Usage: sessionlore <command>");
+    }
+  });
 });
