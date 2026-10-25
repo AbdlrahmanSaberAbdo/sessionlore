@@ -397,6 +397,17 @@ export interface SuggestEstimate {
   models: ModelUsage[];
 }
 
+/** Expected token use per model for an Analysis followed by `suggest`, known before the Analysis runs. */
+export interface RunEstimate {
+  analysis: AnalysisEstimate;
+  /**
+   * An upper bound: which Workflows and Correction Clusters pass the Repeat
+   * Rule is only known after the Analysis, so `suggestions` counts every one
+   * that could, and `models` what writing a Suggestion for each would use.
+   */
+  suggestions: SuggestEstimate;
+}
+
 /** Expected token use per model for naming the Clusters the next `recluster` would form. */
 export interface ReclusterEstimate {
   /** Number of new or unnamed Clusters and Correction Clusters it would name. */
@@ -1289,6 +1300,42 @@ export class App {
       usage.add(model, plan.kind === "skill" ? estimateSkill(plan.input as WorkflowForSkill) : estimateRule(plan.input as CorrectionClusterForRule));
     }
     return { suggestions: plans.length, models: usage.byModel() };
+  }
+
+  /**
+   * What `analyze()` then `suggest()` would send, estimated before either runs.
+   * The Suggestions are an upper bound; see `RunEstimate`.
+   */
+  async estimateRun(): Promise<RunEstimate> {
+    const analysis = this.estimateAnalysis();
+    const already = await this.estimateSuggestions();
+    const model = this.requireModelProvider().strong.modelId;
+    const usage = new UsageTally(this.deps.prices);
+    for (const m of already.models) usage.add(m.model, m.tokens);
+    let suggestions = already.suggestions;
+    const messages = this.sessionsToAnalyze().flatMap((s) => s.userMessages);
+    if (this.deps.embedder && messages.length > 0) {
+      // Beyond the sources that need a Suggestion now, the Analysis can only add sources it changes. Each new User
+      // Message becomes at most one Task and at most one Correction, and each of those joins one Cluster, so at most
+      // that many Clusters change. And a Cluster only starts needing a Suggestion by gaining members, so at most every
+      // stored Cluster plus those built wholly from new ones (minMembers each). The smaller bound is the count.
+      // Each is priced as a Suggestion with the Repeat Rule's minimum of members, taken from the new messages.
+      const { minMembers } = this.repeatRule;
+      const couldChange = (kind: ClusterKind) =>
+        Math.min(messages.length, this.store.clusterCount(kind) + Math.floor(messages.length / minMembers));
+      const sample = Array.from({ length: minMembers }, (_, i) => messages[i % messages.length]!.slice(0, 200));
+      const skills = couldChange("tasks");
+      const rules = couldChange("corrections");
+      const skill: WorkflowForSkill = {
+        name: PLACEHOLDER_TITLE,
+        tasks: sample.map((text) => ({ title: PLACEHOLDER_TITLE, userMessages: [{ text, intent: "New Task" }] })),
+      };
+      const rule: CorrectionClusterForRule = { name: PLACEHOLDER_TITLE, corrections: sample.map((text) => ({ text, task: PLACEHOLDER_TITLE })) };
+      for (let i = 0; i < skills; i++) usage.add(model, estimateSkill(skill));
+      for (let i = 0; i < rules; i++) usage.add(model, estimateRule(rule));
+      suggestions += skills + rules;
+    }
+    return { analysis, suggestions: { suggestions, models: usage.byModel() } };
   }
 
   /**

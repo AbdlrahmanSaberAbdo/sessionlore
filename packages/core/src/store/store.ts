@@ -737,6 +737,11 @@ export class Store {
   }
 
   /** How many Clusters (or Correction Clusters) are unnamed and have fewer than `minMembers` members. */
+  /** How many Clusters (or Correction Clusters) are stored, whatever their size. */
+  clusterCount(kind: ClusterKind): number {
+    return Number(this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${clusterTables[kind].clusters}`)?.n ?? 0);
+  }
+
   smallUnnamedClusters(kind: ClusterKind, minMembers: number): number {
     const { clusters, members, column, isMember } = clusterTables[kind];
     return Number(

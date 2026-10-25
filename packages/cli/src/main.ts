@@ -6,6 +6,9 @@ import { allAdapters } from "@sessionlore/adapters";
 import { allRenderers } from "@sessionlore/renderers";
 import {
   App,
+  type AnalysisResult,
+  type ScanResult,
+  type SuggestResult,
   configPath,
   dataDir,
   loadConfig,
@@ -92,6 +95,9 @@ interface CommandContext {
   err(text: string): void;
 }
 
+/** How far back `run` (and bare `sessionlore`) scans unless `--since` says otherwise. */
+const DEFAULT_RUN_WINDOW = "30d";
+
 interface Command {
   summary: string;
   /** Resolves to the exit code; nothing means success. */
@@ -122,8 +128,7 @@ const commands: Record<string, Command> = {
         return;
       }
       const go = await confirmSpend(ctx, {
-        headline: `${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze`,
-        models: estimate.models,
+        parts: [{ headline: `${estimate.sessions} ${plural(estimate.sessions, "Session")} to analyze`, models: estimate.models }],
         what: "Analysis",
         command: "analyze",
         declined: "Nothing analyzed.",
@@ -169,14 +174,103 @@ const commands: Record<string, Command> = {
     summary: "Read Sessions from every Harness on this machine into the local store",
     async run({ app, json, last, harnesses, since, out, warn }) {
       const result = await app.scan({ last, harnesses, since });
-      for (const warning of result.harnesses.flatMap((h) => h.warnings)) warn(`Warning: ${warning}\n`);
-      if (json) return out(JSON.stringify(result, null, 2) + "\n");
-      for (const harness of result.harnesses) {
-        out(
-          `${harness.name}: ${harness.added} ${plural(harness.added, "Session")} added, ` +
-            `${harness.updated} updated, ${harness.unchanged} unchanged\n`,
-        );
+      if (json) {
+        reportScan(result, () => {}, warn);
+        return out(JSON.stringify(result, null, 2) + "\n");
       }
+      reportScan(result, out, warn);
+    },
+  },
+  run: {
+    summary: `Scan (the last ${DEFAULT_RUN_WINDOW} by default), analyze and suggest in one go, then open the dashboard's Review screen; the default command`,
+    async run(ctx) {
+      const { app, json, signal, modelProvider, last, harnesses, since, serve, out, err, warn } = ctx;
+      const say = json ? err : out;
+      const scanned = await app.scan({ last, harnesses, since });
+      reportScan(scanned, say, warn);
+      if (!modelProvider.ok) {
+        err(modelProvider.problem);
+        return 1;
+      }
+
+      const estimate = await app.estimateRun();
+      const toAnalyze = estimate.analysis.sessions;
+      const toSuggest = estimate.suggestions.suggestions;
+      let analysis: AnalysisResult | null = null;
+      let suggested: SuggestResult | null = null;
+      if (toAnalyze === 0 && toSuggest === 0) {
+        say("Nothing new to analyze and nothing to suggest.\n");
+      } else {
+        const parts = [];
+        if (toAnalyze > 0) parts.push({ headline: `${toAnalyze} ${plural(toAnalyze, "Session")} to analyze`, models: estimate.analysis.models });
+        if (toSuggest > 0) {
+          parts.push(
+            toAnalyze > 0
+              ? {
+                  headline:
+                    `Then up to ${toSuggest} ${plural(toSuggest, "Suggestion")} to write (an upper bound: which Workflows ` +
+                    "and Correction Clusters pass the Repeat Rule is only known after Analysis)",
+                  models: estimate.suggestions.models,
+                  atMost: true,
+                }
+              : { headline: `${toSuggest} ${plural(toSuggest, "Suggestion")} to write`, models: estimate.suggestions.models },
+          );
+        }
+        const go = await confirmSpend(ctx, { parts, what: "Analysis", command: "run", declined: "Nothing analyzed." });
+        if (go !== true) return go;
+        if (toAnalyze > 0) {
+          analysis = await app.analyze({ signal });
+          if (analysis.interrupted) {
+            say(
+              `Interrupted. ${analysis.analyzed.length} ${plural(analysis.analyzed.length, "Session")} analyzed and kept, ` +
+                `${analysis.remaining} left; run \`sessionlore run\` again to pick up where this stopped.\n`,
+            );
+            reportUsage(say, analysis.usage);
+            return interruptedExitCode;
+          }
+        }
+        suggested = await app.suggest({ signal });
+        if (signal?.aborted) {
+          say(`Interrupted. ${suggested.created.length} ${plural(suggested.created.length, "Suggestion")} written and kept.\n`);
+          reportUsage(say, totalUsage(analysis?.usage ?? [], suggested.usage));
+          return interruptedExitCode;
+        }
+      }
+
+      const workflows = app.listWorkflows();
+      const found = {
+        sessions: {
+          added: scanned.harnesses.reduce((n, h) => n + h.added, 0),
+          updated: scanned.harnesses.reduce((n, h) => n + h.updated, 0),
+        },
+        tasks: app.overview().counts.tasks,
+        workflows: workflows.workflows.length,
+        nearWorkflows: workflows.nearWorkflows.length,
+        correctionClusters: app.listCorrections().correctionClusters.length,
+        suggestionsWritten: suggested?.created.length ?? 0,
+      };
+      const usage = totalUsage(analysis?.usage ?? [], suggested?.usage ?? []);
+      if (!json) {
+        out(`Sessions: ${found.sessions.added} added, ${found.sessions.updated} updated\n`);
+        out(`Tasks: ${found.tasks}\n`);
+        out(`Workflows: ${found.workflows}, near-Workflows: ${found.nearWorkflows}\n`);
+        out(`Correction Clusters: ${found.correctionClusters}\n`);
+        out(`Suggestions written: ${found.suggestionsWritten}\n`);
+        for (const f of analysis?.failed ?? []) out(`  Session ${f.session} failed: ${f.error}\n`);
+        for (const f of suggested?.failed ?? []) out(`  ${failedSource(f)} failed: ${f.error}\n`);
+        reportUsage(out, usage);
+      }
+      await serveDashboard(
+        app,
+        serve,
+        signal,
+        (url) =>
+          json
+            ? out(JSON.stringify({ url, scan: scanned, analysis, suggestions: suggested, found, usage }, null, 2) + "\n")
+            : out(`Review the Suggestions: ${url}\n`),
+        say,
+        "suggestions",
+      );
     },
   },
   workflows: {
@@ -216,8 +310,7 @@ const commands: Record<string, Command> = {
       const estimate = await app.estimateRecluster();
       if (estimate.clusters > 0) {
         const go = await confirmSpend(ctx, {
-          headline: `${estimate.clusters} new ${plural(estimate.clusters, "Cluster")} to name`,
-          models: estimate.models,
+          parts: [{ headline: `${estimate.clusters} new ${plural(estimate.clusters, "Cluster")} to name`, models: estimate.models }],
           what: "Re-clustering",
           command: "recluster",
           declined: "Nothing re-clustered.",
@@ -257,8 +350,7 @@ const commands: Record<string, Command> = {
         return;
       }
       const go = await confirmSpend(ctx, {
-        headline: `${estimate.suggestions} ${plural(estimate.suggestions, "Suggestion")} to write`,
-        models: estimate.models,
+        parts: [{ headline: `${estimate.suggestions} ${plural(estimate.suggestions, "Suggestion")} to write`, models: estimate.models }],
         what: "Writing Suggestions",
         command: "suggest",
         declined: "Nothing written.",
@@ -267,9 +359,7 @@ const commands: Record<string, Command> = {
       const result = await app.suggest({ signal });
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
       out(`${result.created.length} ${plural(result.created.length, "Suggestion")} written\n`);
-      for (const f of result.failed) {
-        out(`  ${"workflow" in f ? `Workflow ${f.workflow}` : `Correction Cluster ${f.correctionCluster}`} failed: ${f.error}\n`);
-      }
+      for (const f of result.failed) out(`  ${failedSource(f)} failed: ${f.error}\n`);
       reportUsage(out, result.usage);
       if (result.created.length > 0) out("Run `sessionlore review` to see them.\n");
     },
@@ -496,11 +586,14 @@ async function serveDashboard(
   signal: AbortSignal | undefined,
   announce: (url: string) => void,
   say: (text: string) => void,
+  /** The dashboard screen to open, relative to its root. */
+  screen = "",
 ): Promise<void> {
   const server = await listen(createServer({ app, uiDir: serve.uiDir }), { port: serve.port });
-  announce(server.url);
+  const url = new URL(screen, server.url).href;
+  announce(url);
   say("Press Ctrl-C to stop.\n");
-  if (serve.open) serve.openBrowser?.(server.url);
+  if (serve.open) serve.openBrowser?.(url);
   await stopped(signal);
   await server.close();
 }
@@ -571,15 +664,23 @@ function dollars(usd: number): string {
  */
 async function confirmSpend(
   { json, yes, ask, configFile, out, err }: CommandContext,
-  estimate: { headline: string; models: ModelUsage[]; what: string; command: string; declined: string },
+  estimate: {
+    /** Each part of the spend, in the order it happens; `atMost` labels an upper bound. */
+    parts: { headline: string; models: ModelUsage[]; atMost?: boolean }[];
+    what: string;
+    command: string;
+    declined: string;
+  },
 ): Promise<true | number | undefined> {
   const say = json ? err : out;
-  say(`${estimate.headline}. Estimated use:\n`);
-  for (const { model, tokens, costUsd } of estimate.models) {
-    const cost = costUsd === null ? "cost unknown" : `about ${dollars(costUsd)}`;
-    say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+  for (const part of estimate.parts) {
+    say(`${part.headline}. Estimated use${part.atMost ? ", at most" : ""}:\n`);
+    for (const { model, tokens, costUsd } of part.models) {
+      const cost = costUsd === null ? "cost unknown" : `about ${dollars(costUsd)}`;
+      say(`  ${model}: about ${count(tokens.input)} input and ${count(tokens.output)} output tokens, ${cost}\n`);
+    }
   }
-  const unpriced = estimate.models.filter((m) => m.costUsd === null).map((m) => m.model);
+  const unpriced = [...new Set(estimate.parts.flatMap((p) => p.models).filter((m) => m.costUsd === null).map((m) => m.model))];
   if (unpriced.length > 0) say(unpricedHint(unpriced, configFile));
   if (yes) return true;
   if (!ask) {
@@ -590,6 +691,40 @@ async function confirmSpend(
   if (/^\s*y(es)?\s*$/i.test(answer)) return true;
   say(`${estimate.declined}\n`);
   return undefined;
+}
+
+/** What a Scan read, per Harness, with any warnings. */
+function reportScan(result: ScanResult, out: (text: string) => void, warn: (text: string) => void): void {
+  for (const warning of result.harnesses.flatMap((h) => h.warnings)) warn(`Warning: ${warning}\n`);
+  for (const harness of result.harnesses) {
+    out(
+      `${harness.name}: ${harness.added} ${plural(harness.added, "Session")} added, ` +
+        `${harness.updated} updated, ${harness.unchanged} unchanged\n`,
+    );
+  }
+}
+
+/** Usage of several steps added up per model; a cost is unknown when any step's is. */
+function totalUsage(...steps: (readonly ModelUsage[])[]): ModelUsage[] {
+  const total = new Map<string, ModelUsage>();
+  for (const u of steps.flat()) {
+    const sum = total.get(u.model);
+    total.set(
+      u.model,
+      sum
+        ? {
+            model: u.model,
+            tokens: { input: sum.tokens.input + u.tokens.input, output: sum.tokens.output + u.tokens.output },
+            costUsd: sum.costUsd === null || u.costUsd === null ? null : sum.costUsd + u.costUsd,
+          }
+        : u,
+    );
+  }
+  return [...total.values()];
+}
+
+function failedSource(f: SuggestResult["failed"][number]): string {
+  return "workflow" in f ? `Workflow ${f.workflow}` : `Correction Cluster ${f.correctionCluster}`;
 }
 
 /** The tokens and cost a command actually used, per model. */
@@ -621,17 +756,17 @@ function firstLine(text: string): string {
 function usage(): string {
   const lines = Object.entries({ ...commands, ...standaloneCommands }).map(([name, c]) => `  ${name.padEnd(10)} ${c.summary}`);
   return (
-    `Usage: sessionlore <command> [--json]\n\nCommands:\n${lines.join("\n")}\n\n` +
+    `Usage: sessionlore <command> [--json]\n\nWith no command, sessionlore does \`run\` with its defaults.\n\nCommands:\n${lines.join("\n")}\n\n` +
     `Options:\n  --json                     Machine-readable output\n` +
-    `  --last N                   scan: read only the N most recent Sessions\n` +
+    `  --last N                   scan, run: read only the N most recent Sessions\n` +
     `  --since <window>           scan, run: read only Sessions active within 30d, 2w, or since a date (2026-09-01)\n` +
-    `  --harness <id>             scan: read only claude-code or cursor (repeat, or separate with commas)\n` +
-    `  --yes, -y                  analyze, suggest, recluster: skip the cost estimate confirmation\n` +
+    `  --harness <id>             scan, run: read only claude-code or cursor (repeat, or separate with commas)\n` +
+    `  --yes, -y                  run, analyze, suggest, recluster: skip the cost estimate confirmation\n` +
     `  --show-redacted <session>  analyze: print the redacted text Analysis would send for a Session\n` +
     `  --export                   stats: print aggregate numbers only (counts, Corrections per Task, Workflow names)\n` +
     `  --anonymize                stats --export: replace Workflow names with neutral labels\n` +
-    `  --port N                   serve, demo: port to serve the dashboard on (default ${DEFAULT_PORT})\n` +
-    `  --no-open                  serve, demo: print the dashboard's address without opening the browser\n`
+    `  --port N                   run, serve, demo: port to serve the dashboard on (default ${DEFAULT_PORT})\n` +
+    `  --no-open                  run, serve, demo: print the dashboard's address without opening the browser\n`
   );
 }
 
@@ -698,14 +833,11 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     return 2;
   }
 
-  const [name] = parsed.positionals;
+  // Bare `sessionlore` runs the whole flow.
+  const name = parsed.positionals[0] ?? "run";
   if (parsed.values.help) {
     io.stdout(usage());
     return 0;
-  }
-  if (!name) {
-    io.stderr(usage());
-    return 2;
   }
   const command = commands[name];
   const standalone = standaloneCommands[name];
@@ -723,11 +855,12 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     }
   }
 
+  const window = parsed.values.since ?? (name === "run" ? DEFAULT_RUN_WINDOW : undefined);
   let since: Date | undefined;
-  if (parsed.values.since !== undefined) {
-    since = parseSince(parsed.values.since, io.clock.now()) ?? undefined;
+  if (window !== undefined) {
+    since = parseSince(window, io.clock.now()) ?? undefined;
     if (!since) {
-      io.stderr(`--since takes ${sinceHelp}, not "${parsed.values.since}"\n\n${usage()}`);
+      io.stderr(`--since takes ${sinceHelp}, not "${window}"\n\n${usage()}`);
       return 2;
     }
   }

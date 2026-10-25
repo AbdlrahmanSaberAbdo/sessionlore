@@ -122,7 +122,13 @@ Add a "modelProvider" section to ${configFile}:
 "provider" is one of ${modelProviderNames.join(", ")}. The API key comes from "apiKey", the variable named in "apiKeyEnv",
 SESSIONLORE_API_KEY or the provider's own variable (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY);
 Ollama needs none. SESSIONLORE_PROVIDER, SESSIONLORE_CHEAP_MODEL, SESSIONLORE_STRONG_MODEL and SESSIONLORE_BASE_URL
-override the file.
+override the file, so you can also skip it entirely:
+
+  export SESSIONLORE_PROVIDER=openai
+  export SESSIONLORE_CHEAP_MODEL=gpt-5-mini
+  export SESSIONLORE_STRONG_MODEL=gpt-5
+  export SESSIONLORE_API_KEY=sk-...       # or OPENAI_API_KEY
+  # SESSIONLORE_BASE_URL=...              # optional
 `;
 }
 

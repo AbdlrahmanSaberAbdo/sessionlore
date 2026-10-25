@@ -21,8 +21,8 @@ describe("help", () => {
     }
   });
 
-  it("prints the usage as an error when no command is given", async () => {
-    const result = await runCli(home, []);
+  it("prints the usage as an error for an unknown command", async () => {
+    const result = await runCli(home, ["frobnicate"]);
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("Usage: sessionlore <command>");
   });

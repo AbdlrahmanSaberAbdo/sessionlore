@@ -13,6 +13,7 @@ export {
   App,
   type AppDependencies,
   type AnalysisEstimate,
+  type RunEstimate,
   type AnalysisResult,
   type AnalyzeOptions,
   type ModelUsage,
