@@ -19,3 +19,7 @@ docs/private/
 .DS_Store
 .idea/
 .vscode/
+
+# Copied from the repository root by the CLI build for the published package
+packages/cli/README.md
+packages/cli/LICENSE

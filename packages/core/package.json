@@ -1,0 +1,12 @@
+{
+  "name": "@sessionlore/core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@sessionlore/analysis": "workspace:*",
+    "ai": "7.0.152"
+  }
+}

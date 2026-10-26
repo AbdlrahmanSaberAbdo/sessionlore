@@ -1,0 +1,49 @@
+{
+  "name": "sessionlore",
+  "version": "0.1.0",
+  "description": "Find the work you keep repeating in your AI coding sessions and turn it into agent skills and rules.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbdlrahmanSaberAbdo/sessionlore.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/AbdlrahmanSaberAbdo/sessionlore#readme",
+  "bugs": {
+    "url": "https://github.com/AbdlrahmanSaberAbdo/sessionlore/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "cursor",
+    "ai",
+    "agents",
+    "skills",
+    "rules",
+    "cli"
+  ],
+  "type": "module",
+  "bin": {
+    "sessionlore": "./dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter @sessionlore/ui build && tsup"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "4.0.87",
+    "@ai-sdk/google": "4.0.104",
+    "@ai-sdk/openai": "4.0.101",
+    "@ai-sdk/openai-compatible": "3.0.77",
+    "@hono/node-server": "2.1.5",
+    "@huggingface/transformers": "4.3.1",
+    "ai": "7.0.152",
+    "hono": "4.13.13",
+    "ollama-ai-provider-v2": "4.1.0",
+    "zod": "4.6.7"
+  }
+}
