@@ -36,9 +36,10 @@ describe("serve", { timeout: SLOW }, () => {
     const result = await serve.stop();
 
     expect(url.hostname).toBe("127.0.0.1");
+    expect(url.pathname).toBe("/");
     expect(overview.counts.sessions).toBe(1);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(serve.url);
+    expect(result.stdout).toContain(`Open Home in your browser: ${serve.url}\n`);
     await expect(fetch(new URL("/api/overview", url))).rejects.toThrow();
   });
 

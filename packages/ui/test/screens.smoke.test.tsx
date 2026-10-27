@@ -1,42 +1,16 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type {
-  FilterOptions,
-  MindMap,
-  Overview,
-  ReviewQueue,
-  SessionList,
-  SessionView,
-  SuggestionReview,
-  WorkflowDetail,
-  WorkflowList,
-} from "@sessionlore/core";
-import { MindMapScreen } from "../src/screens/mind-map.js";
-import { OverviewScreen } from "../src/screens/overview.js";
-import { ReviewQueueScreen, ReviewScreen, type ReviewActions } from "../src/screens/review.js";
-import { SessionScreen, SessionsScreen } from "../src/screens/sessions.js";
+import type { FilterOptions, ReviewQueue, SessionView, SuggestionReview, WorkflowDetail, WorkflowList } from "@sessionlore/core";
+import { Rail } from "../src/components/rail.js";
+import { CorrectionsScreen } from "../src/screens/corrections.js";
+import { PendingScreen, ReviewScreen, type ReviewActions } from "../src/screens/review.js";
+import { SessionScreen } from "../src/screens/sessions.js";
 import { WorkflowScreen, WorkflowsScreen } from "../src/screens/workflows.js";
 
 /**
  * The UI's smoke test: each screen renders the data the API returns. UI logic
  * is kept thin; behaviour is tested through the API (Seam 2).
  */
-
-const overview: Overview = {
-  counts: { sessions: 12, tasks: 31, workflows: 2 },
-  topWorkflows: [
-    { id: 4, name: "Write database migrations", tasks: 7, sessions: 5 },
-    { id: 9, name: "Update release notes", tasks: 3, sessions: 3 },
-  ],
-  corrections: {
-    period: "week",
-    periods: [
-      { start: "2026-05-04", corrections: 6 },
-      { start: "2026-05-11", corrections: 0 },
-      { start: "2026-05-18", corrections: 3 },
-    ],
-  },
-};
 
 const filters: FilterOptions = {
   projects: [
@@ -122,8 +96,6 @@ const sessionView: SessionView = {
   ],
 };
 
-const sessions: SessionList = { sessions: [sessionView], filters };
-
 const queue: ReviewQueue = {
   suggestions: [
     {
@@ -204,70 +176,6 @@ const ruleReview: SuggestionReview = {
 const noActions: ReviewActions = { save: async () => {}, setScope: async () => {}, accept: async () => {}, reject: async () => {} };
 
 
-const mindMap: MindMap = {
-  nodes: [
-    { id: "project:/code/shop", kind: "project", label: "shop", path: "/code/shop", harnesses: ["claude-code", "cursor"] },
-    {
-      id: "workflow:4",
-      kind: "workflow",
-      label: "Write database migrations",
-      harnesses: ["claude-code", "cursor"],
-      workflow: 4,
-      tasks: 2,
-      sessions: 2,
-      correctionsPerTask: 0.5,
-    },
-    {
-      id: "task:claude-code:sess-1:0",
-      kind: "task",
-      label: "write a migration for orders",
-      harnesses: ["claude-code"],
-      session: "sess-1",
-      position: 0,
-      at: "2026-05-04T09:00:00.000Z",
-      corrections: 1,
-    },
-    {
-      id: "task:cursor:sess-2:0",
-      kind: "task",
-      label: "migration for the cart table",
-      harnesses: ["cursor"],
-      session: "sess-2",
-      position: 0,
-      at: "2026-05-26T09:00:00.000Z",
-      corrections: 0,
-    },
-    {
-      id: "session:claude-code:sess-1",
-      kind: "session",
-      label: "shop · 2026-05-04",
-      harnesses: ["claude-code"],
-      session: "sess-1",
-      project: { name: "shop", path: "/code/shop" },
-      startedAt: "2026-05-04T09:00:00.000Z",
-    },
-    {
-      id: "session:cursor:sess-2",
-      kind: "session",
-      label: "shop · 2026-05-26",
-      harnesses: ["cursor"],
-      session: "sess-2",
-      project: { name: "shop", path: "/code/shop" },
-      startedAt: "2026-05-26T09:00:00.000Z",
-    },
-    { id: "suggestion:2", kind: "suggestion", label: "Write a database migration", harnesses: ["claude-code", "cursor"], suggestion: 2, state: "Pending" },
-  ],
-  edges: [
-    { id: "e1", source: "project:/code/shop", target: "workflow:4" },
-    { id: "e2", source: "workflow:4", target: "task:claude-code:sess-1:0" },
-    { id: "e3", source: "workflow:4", target: "task:cursor:sess-2:0" },
-    { id: "e4", source: "task:claude-code:sess-1:0", target: "session:claude-code:sess-1" },
-    { id: "e5", source: "task:cursor:sess-2:0", target: "session:cursor:sess-2" },
-    { id: "e6", source: "workflow:4", target: "suggestion:2" },
-  ],
-  filters,
-};
-
 describe("UI screens", () => {
   it("Workflows lists Workflows and near-Workflows with counts, Harnesses, Suggestion state and filters", () => {
     const html = renderToStaticMarkup(<WorkflowsScreen list={workflows} filter={{ harness: "cursor" }} />);
@@ -289,13 +197,6 @@ describe("UI screens", () => {
     expect(html).toContain("2.00 Corrections per Task");
   });
 
-  it("Sessions lists Sessions linking to the viewer, with filters", () => {
-    const html = renderToStaticMarkup(<SessionsScreen list={sessions} filter={{}} />);
-
-    expect(html).toContain('href="/sessions/sess-1"');
-    expect(html).toContain("shop");
-  });
-
   it("Session viewer shows messages with Task boundaries and Corrections marked", () => {
     const html = renderToStaticMarkup(<SessionScreen session={sessionView} />);
 
@@ -308,24 +209,46 @@ describe("UI screens", () => {
     expect(html).toContain("1 Correction");
   });
 
-  it("Overview shows the counts, top Workflows and a Corrections-over-time chart", () => {
-    const html = renderToStaticMarkup(<OverviewScreen overview={overview} />);
+  it("The rail shows Home with the Pending count, Workflows, Corrections and what was read, marking the current section", () => {
+    const html = renderToStaticMarkup(<Rail section="/workflows" pending={3} counts={{ sessions: 12, tasks: 31, workflows: 2 }} />);
 
-    for (const text of ["12", "31", "Sessions", "Tasks", "Workflows", "Write database migrations", "Update release notes"]) {
-      expect(html).toContain(text);
-    }
-    expect(html).toMatch(/<svg[^>]*aria-label="Corrections per week"/);
-    expect(html.match(/<rect/g)).toHaveLength(3);
-    expect(html).toContain("2026-05-04: 6 Corrections");
+    expect(html).toMatch(/<a href="\/" class="nav">Home<span class="count">3<span class="visually-hidden"> Pending<\/span><\/span><\/a>/);
+    expect(html).toContain('<a href="/workflows" class="nav" aria-current="page">Workflows</a>');
+    expect(html).toContain('<a href="/corrections" class="nav">Corrections</a>');
+    expect(html).toContain("Read from 12 Sessions and 31 Tasks");
   });
 
-  it("Review lists Pending Suggestions with kind, Scope and Evidence count, linking to each", () => {
-    const html = renderToStaticMarkup(<ReviewQueueScreen queue={queue} />);
+  it("The rail leaves out the count when nothing is Pending, and what was read until it is loaded", () => {
+    const html = renderToStaticMarkup(<Rail section="/" pending={0} counts={null} />);
 
-    for (const text of ["Write a database migration", "Skill", "Project scope (shop)", "3 Tasks", "Rule", "User scope", "4 Corrections", "Updates /code/shop/CLAUDE.md"]) {
+    expect(html).toContain('<a href="/" class="nav" aria-current="page">Home</a>');
+    expect(html).not.toContain("Read from");
+  });
+
+  it("Home lists Pending Suggestions, Skills then Rules, with Evidence count and Scope, linking to each", () => {
+    const html = renderToStaticMarkup(<PendingScreen queue={queue} />);
+
+    expect(html).toContain("2 to review");
+    expect(html).toMatch(/<h2>Skills<\/h2>[^]*Write a database migration[^]*<h2>Rules<\/h2>[^]*Use pnpm/);
+    for (const text of ["Seen in 3 Tasks, for Project scope (shop).", "From 4 Corrections, for User scope.", "Updates /code/shop/CLAUDE.md"]) {
       expect(html).toContain(text);
     }
+    expect(html).toContain('<li class="rule">');
     expect(html).toContain('href="/suggestions/2"');
+  });
+
+  it("Home says how to get Suggestions when none is Pending", () => {
+    const html = renderToStaticMarkup(<PendingScreen queue={{ suggestions: [] }} />);
+
+    expect(html).toContain("Nothing to review");
+    expect(html).toContain("<code>sessionlore suggest</code>");
+    expect(html).not.toContain("<h2>Skills</h2>");
+  });
+
+  it("Corrections says where to see Correction Clusters for now", () => {
+    const html = renderToStaticMarkup(<CorrectionsScreen />);
+
+    expect(html).toContain("<code>sessionlore corrections</code>");
   });
 
   it("A Suggestion in review shows what accepting writes, an edit form, the Scope, actions and Evidence links", () => {
@@ -364,41 +287,5 @@ describe("UI screens", () => {
     expect(html).toContain("/code/shop/x/SKILL.md");
     expect(html).not.toContain(">Accept</button>");
     expect(html).not.toContain("<textarea");
-  });
-
-  it("Mind map draws the graph coloured by Harness, with filters and a legend", () => {
-    const html = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{}} />);
-
-    for (const text of ["shop", "Write database migrations", "write a migration for orders", "shop · 2026-05-26", "Write a database migration"]) {
-      expect(html).toContain(text);
-    }
-    expect(html).toMatch(/class="mind-node task harness-claude-code"/);
-    expect(html).toMatch(/class="mind-node session harness-cursor"/);
-    expect(html).toContain('<option value="cursor">Cursor</option>');
-    expect(html).toMatch(/class="legend"[^]*Claude Code[^]*Cursor/);
-  });
-
-  it("Mind map shows a clicked node's details, linking Workflows and Sessions to their screens", () => {
-    const workflowHtml = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{ harness: "cursor" }} initialSelected="workflow:4" />);
-    const sessionHtml = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{}} initialSelected="session:cursor:sess-2" />);
-
-    expect(workflowHtml).toMatch(/class="mind-details[^"]*"[^]*2 Tasks[^]*0.50 Corrections per Task/);
-    expect(workflowHtml).toContain('href="/workflows/4?harness=cursor"');
-    expect(sessionHtml).toContain('href="/sessions/sess-2"');
-  });
-
-  it("Mind map links a Suggestion node to its review screen", () => {
-    const html = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{}} initialSelected="suggestion:2" />);
-
-    expect(html).toContain('href="/suggestions/2"');
-  });
-
-  it("Mind map hides a collapsed node's Tasks and Sessions", () => {
-    const html = renderToStaticMarkup(<MindMapScreen map={mindMap} filter={{}} initialCollapsed={["workflow:4"]} />);
-
-    expect(html).toContain("Write database migrations");
-    expect(html).not.toContain("write a migration for orders");
-    expect(html).not.toContain("shop · 2026-05-04");
-    expect(html).toContain("2 hidden");
   });
 });

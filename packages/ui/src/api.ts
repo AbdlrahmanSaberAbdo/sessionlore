@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Reads the dashboard's JSON API. Response types are the App's own types from
@@ -14,12 +14,17 @@ export async function getJson<T>(path: string): Promise<T> {
   return body as T;
 }
 
-/** Fetches `path` once per change of `path`, and again whenever `refresh` changes. */
+/**
+ * Fetches `path` once per change of `path`, and again whenever `refresh` changes;
+ * a refresh keeps showing the data it already has until the new data arrives.
+ */
 export function useApi<T>(path: string, refresh: unknown = null): Loaded<T> {
   const [loaded, setLoaded] = useState<Loaded<T>>({ state: "loading" });
+  const loadedPath = useRef(path);
   useEffect(() => {
     let current = true;
-    setLoaded({ state: "loading" });
+    if (loadedPath.current !== path) setLoaded({ state: "loading" });
+    loadedPath.current = path;
     getJson<T>(path).then(
       (data) => current && setLoaded({ state: "ready", data }),
       (error: unknown) => current && setLoaded({ state: "error", message: error instanceof Error ? error.message : String(error) }),

@@ -103,7 +103,7 @@ describe("run", { timeout: SLOW }, () => {
     expect(await storedSessions()).toEqual(["2026-05-28", "2026-05-24", "2026-05-20"]);
   });
 
-  it("scans the last 30 days, analyzes, suggests, and serves the Review screen, after one combined estimate", async () => {
+  it("scans the last 30 days, analyzes, suggests, and serves Home, after one combined estimate", async () => {
     repeatedWorkflow();
     const opts = options();
 
@@ -113,7 +113,7 @@ describe("run", { timeout: SLOW }, () => {
     const result = await run.stop();
 
     expect(url.hostname).toBe("127.0.0.1");
-    expect(url.pathname).toBe("/suggestions");
+    expect(url.pathname).toBe("/");
     expect(queue.suggestions.map((s: { title: string }) => s.title)).toEqual(["Write a database migration"]);
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toContain("Analysis: 3 new or changed Sessions\n");
@@ -207,7 +207,7 @@ describe("run", { timeout: SLOW }, () => {
     expect(result.stdout).toContain("Nothing new to analyze and nothing to suggest.");
     expect(result.stdout).not.toContain("Continue?");
     expect(opts.requests()).toHaveLength(before);
-    expect(new URL(run.url).pathname).toBe("/suggestions");
+    expect(new URL(run.url).pathname).toBe("/");
   });
 
   it("keeps finished Sessions when interrupted during Analysis, and serves nothing", async () => {
@@ -312,7 +312,7 @@ describe("run explains what it did", { timeout: SLOW }, () => {
         "  1 new Suggestion to review\n" +
         "Cost: ",
     );
-    expect(result.stdout).toMatch(/\nReview it in your browser: http:\/\/127\.0\.0\.1:\d+\/suggestions\n/);
+    expect(result.stdout).toMatch(/\nReview it on Home: http:\/\/127\.0\.0\.1:\d+\/\n/);
   });
 
   it("says why it wrote no Suggestion when no Workflow repeats often enough yet", async () => {
@@ -337,7 +337,7 @@ describe("sessionlore with no command", { timeout: SLOW }, () => {
     const result = await run.stop();
 
     expect(result.exitCode, result.stderr).toBe(0);
-    expect(new URL(run.url).pathname).toBe("/suggestions");
+    expect(new URL(run.url).pathname).toBe("/");
     expect(await storedSessions()).toEqual(["2026-05-28", "2026-05-24", "2026-05-20"]);
   });
 });

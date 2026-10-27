@@ -4,15 +4,15 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { openDemo, type Demo } from "../../cli/src/demo.js";
-import { MindMapScreen } from "../src/screens/mind-map.js";
-import { OverviewScreen } from "../src/screens/overview.js";
-import { ReviewQueueScreen, ReviewScreen, type ReviewActions } from "../src/screens/review.js";
-import { SessionScreen, SessionsScreen } from "../src/screens/sessions.js";
+import { Rail } from "../src/components/rail.js";
+import { CorrectionsScreen } from "../src/screens/corrections.js";
+import { PendingScreen, ReviewScreen, type ReviewActions } from "../src/screens/review.js";
+import { SessionScreen } from "../src/screens/sessions.js";
 import { WorkflowScreen, WorkflowsScreen } from "../src/screens/workflows.js";
 
 /**
- * The UI smoke test on the demo dataset (`sessionlore demo`): each of the five
- * screens renders the data the demo's App gives the API, with meaningful content.
+ * The UI smoke test on the demo dataset (`sessionlore demo`): the rail and each
+ * screen render the data the demo's App gives the API, with meaningful content.
  */
 
 let root: string;
@@ -37,12 +37,13 @@ function api<T>(result: T): T {
 const noActions: ReviewActions = { save: async () => {}, setScope: async () => {}, accept: async () => {}, reject: async () => {} };
 
 describe("the dashboard on the demo dataset", () => {
-  it("Overview shows the counts, top Workflows and Corrections over time", () => {
-    const html = renderToStaticMarkup(<OverviewScreen overview={api(demo.app.overview())} />);
+  it("The rail shows the Pending count and how many Sessions and Tasks were read", () => {
+    const html = renderToStaticMarkup(
+      <Rail section="/" pending={api(demo.app.reviewQueue()).suggestions.length} counts={api(demo.app.overview()).counts} />,
+    );
 
-    expect(html).toContain("Write database migrations");
-    expect(html).toContain("Update the release notes");
-    expect(html).toMatch(/<svg[^>]*aria-label="Corrections per week"/);
+    expect(html).toMatch(/Home<span class="count">3</);
+    expect(html).toMatch(/Read from \d+ Sessions and \d+ Tasks/);
   });
 
   it("Workflows lists Workflows and near-Workflows, and a Workflow shows its Tasks", () => {
@@ -59,40 +60,34 @@ describe("the dashboard on the demo dataset", () => {
     expect(detailHtml).toContain("Write a database migration");
   });
 
-  it("Session viewer lists Sessions and shows one with Task boundaries and Corrections", () => {
-    const sessions = api(demo.app.browseSessions());
-    const corrected = sessions.sessions
-      .map((s) => api(demo.app.viewSession(s.id))!)
+  it("Session viewer shows a Session with Task boundaries and Corrections", () => {
+    const list = api(demo.app.browseWorkflows());
+    const sessionIds = new Set(
+      [...list.workflows, ...list.nearWorkflows].flatMap((w) => api(demo.app.browseWorkflow(w.id))!.tasks.map((t) => t.session)),
+    );
+    const corrected = [...sessionIds]
+      .map((id) => api(demo.app.viewSession(id))!)
       .find((s) => s.messages.some((m) => m.role === "user" && m.text.startsWith("no, use pnpm")))!;
 
-    const listHtml = renderToStaticMarkup(<SessionsScreen list={sessions} filter={{}} />);
     const sessionHtml = renderToStaticMarkup(<SessionScreen session={corrected} />);
 
-    expect(listHtml).toContain("shop");
-    expect(listHtml).toContain("blog");
     expect(sessionHtml).toMatch(/class="message user correction"[^]*no, use pnpm not npm to run it/);
     expect(sessionHtml).toContain('class="task-boundary"');
     expect(sessionHtml).toContain("Write database migrations");
   });
 
-  it("Mind map draws Projects, Workflows, Tasks, Sessions and Suggestions coloured by Harness", () => {
-    const html = renderToStaticMarkup(<MindMapScreen map={api(demo.app.mindMap())} filter={{}} />);
-
-    expect(html).toContain("shop");
-    expect(html).toContain("Write database migrations");
-    expect(html).toMatch(/class="mind-node task harness-cursor"/);
-    expect(html).toMatch(/class="mind-node session harness-claude-code"/);
-    expect(html).toContain("Write a database migration");
+  it("Corrections renders", () => {
+    expect(renderToStaticMarkup(<CorrectionsScreen />)).toContain("Corrections");
   });
 
-  it("Review lists Pending Suggestions, and the one with a Target shows its diff", () => {
+  it("Home lists Pending Suggestions, and the one with a Target shows its diff", () => {
     const queue = api(demo.app.reviewQueue());
     const targeted = queue.suggestions.find((s) => s.target)!;
 
-    const queueHtml = renderToStaticMarkup(<ReviewQueueScreen queue={queue} />);
+    const queueHtml = renderToStaticMarkup(<PendingScreen queue={queue} />);
     const reviewHtml = renderToStaticMarkup(<ReviewScreen review={api(demo.app.reviewSuggestion(targeted.id))!} actions={noActions} />);
 
-    for (const text of ["Write a database migration", "Update the release notes", "Use pnpm", "Skill", "Rule", "Updates "]) {
+    for (const text of ["Write a database migration", "Update the release notes", "Use pnpm", "<h2>Skills</h2>", "<h2>Rules</h2>", "Updates "]) {
       expect(queueHtml).toContain(text);
     }
     expect(reviewHtml).toContain('<span class="del">-- Always run things with pnpm.');

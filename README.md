@@ -62,7 +62,7 @@ npx sessionlore                    # same as: npx sessionlore run --since 30d
 npx sessionlore run --since 2w     # or a date: --since 2026-09-01
 ```
 
-Scans the sessions you were active in during the last 30 days (Claude Code and Cursor), analyzes them, drafts suggestions, and opens the dashboard on the review queue. Press Ctrl-C to stop it.
+Scans the sessions you were active in during the last 30 days (Claude Code and Cursor), analyzes them, drafts suggestions, and opens the dashboard on Home, where the suggestions wait for review. Press Ctrl-C to stop it.
 
 Before calling any model it shows one combined estimate and asks once. The analysis part is an estimate of the cheap model's use. The suggestion part is an upper bound: which workflows and repeated corrections show up is only known after the analysis, so it counts every one that could. `--yes` skips the question; without a terminal (in a pipe or CI) `run` stops before spending anything unless you pass `--yes`. Afterwards it reports what it found (sessions added and updated, tasks, workflows, near-workflows, repeated corrections, suggestions written) and the tokens and cost it used.
 
@@ -133,7 +133,7 @@ Skills are written to `.claude/skills/<name>/SKILL.md` and rules to `CLAUDE.md`,
 npx sessionlore serve
 ```
 
-Opens the same data in your browser: an overview, a map of projects, workflows, tasks and sessions, and the review queue with accept, edit and reject. It listens on `127.0.0.1` only. `--port N` and `--no-open` work as in the demo.
+Opens the dashboard on Home in your browser: the suggestions waiting for review, with accept, edit and reject, plus your workflows and the sessions behind each suggestion. It listens on `127.0.0.1` only. `--port N` and `--no-open` work as in the demo.
 
 ## What leaves your machine
 

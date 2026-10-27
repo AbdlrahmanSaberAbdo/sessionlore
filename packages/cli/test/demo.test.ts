@@ -88,12 +88,12 @@ describe("the demo dataset", { timeout: SLOW }, () => {
     expect(targeted.target.path.startsWith(datasetRoot)).toBe(true);
   });
 
-  it("has a Mind map and a Session viewer with Tasks and Corrections", async () => {
-    const map = await demo.get("/api/mind-map");
-    const sessions = await demo.get("/api/sessions");
-    const viewed = await Promise.all(sessions.sessions.map((s: any) => demo.get(`/api/sessions/${s.id}`)));
+  it("has a Session viewer with Tasks and Corrections, reached through Workflows' Tasks", async () => {
+    const { workflows } = await demo.get("/api/workflows");
+    const details = await Promise.all(workflows.map((w: any) => demo.get(`/api/workflows/${w.id}`)));
+    const ids = new Set<string>(details.flatMap((d) => d.tasks.map((t: any) => t.session)));
+    const viewed = await Promise.all([...ids].map((id) => demo.get(`/api/sessions/${encodeURIComponent(id)}`)));
 
-    expect(new Set(map.nodes.map((n: any) => n.kind))).toEqual(new Set(["project", "workflow", "task", "session", "suggestion"]));
     expect(viewed.some((s) => s.messages.some((m: any) => m.intent === "Correction"))).toBe(true);
     expect(viewed.some((s) => s.tasks.some((t: any) => t.workflow !== null))).toBe(true);
   });
@@ -138,10 +138,12 @@ describe("sessionlore demo", { timeout: SLOW }, () => {
     const store = snapshotTree(home.resolve(".sessionlore"));
 
     const running = await startDemo(home, root);
-    const sessions = await (await fetch(new URL("/api/sessions", running.url))).json();
+    // The filters offer the Project of every stored Session.
+    const { filters } = await running.get("/api/workflows");
     await running.stop();
 
-    expect(sessions.sessions.some((s: any) => s.project?.name === "mine")).toBe(false);
+    expect(filters.projects.map((p: any) => p.name)).not.toContain("mine");
+    expect(filters.projects.length).toBeGreaterThan(0);
     expect(snapshotTree(home.resolve(".sessionlore"))).toEqual(store);
     expect((await runCli(home, ["sessions", "--json"])).json().sessions).toHaveLength(1);
   });
