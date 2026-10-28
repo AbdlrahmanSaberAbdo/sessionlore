@@ -8,7 +8,7 @@ import {
   turn,
   writeClaudeSession,
   writeCursorDatabase,
-} from "@sessionlore/fixtures";
+} from "@habitlore/fixtures";
 import { snapshotTree } from "./support/files.js";
 import { runCli } from "./support/harness.js";
 
@@ -325,7 +325,7 @@ describe("scan --harness", () => {
     expect(again.json().harnesses.map((h: any) => h.harness).sort()).toEqual(["claude-code", "cursor"]);
   });
 
-  it("rejects a Harness sessionlore does not know", async () => {
+  it("rejects a Harness habitlore does not know", async () => {
     const result = await runCli(home, ["scan", "--harness", "vim"]);
 
     expect(result.exitCode).toBe(2);

@@ -1,4 +1,4 @@
-import type { BrowseFilter, FilterOptions, HarnessId } from "@sessionlore/core";
+import type { BrowseFilter, FilterOptions, HarnessId } from "@habitlore/core";
 import { filterQuery, navigate } from "../router.js";
 
 const harnessNames: Record<string, string> = { "claude-code": "Claude Code", cursor: "Cursor" };

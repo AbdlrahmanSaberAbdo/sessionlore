@@ -10,7 +10,7 @@ import type {
   SuggestionReview,
   WorkflowDetail,
   WorkflowList,
-} from "@sessionlore/core";
+} from "@habitlore/core";
 import { MindMapScreen } from "../src/screens/mind-map.js";
 import { OverviewScreen } from "../src/screens/overview.js";
 import { ReviewQueueScreen, ReviewScreen, type ReviewActions } from "../src/screens/review.js";

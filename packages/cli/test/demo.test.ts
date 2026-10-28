@@ -2,12 +2,12 @@ import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { snapshotTree } from "./support/files.js";
 import { runCli } from "./support/harness.js";
 
 /**
- * `sessionlore demo`: synthetic Sessions built with the fixture builders,
+ * `habitlore demo`: synthetic Sessions built with the fixture builders,
  * analyzed into a separate demo store without a Model Provider, and served by
  * the dashboard. Started through the CLI (Seam 1) and read back over HTTP.
  */
@@ -19,7 +19,7 @@ let root: string;
 let home: FixtureHome;
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), "sessionlore-demo-root-")));
+  root = realpathSync(mkdtempSync(join(tmpdir(), "habitlore-demo-root-")));
   home = FixtureHome.create();
 });
 
@@ -50,7 +50,7 @@ describe("the demo dataset", { timeout: SLOW }, () => {
   let demo: Awaited<ReturnType<typeof startDemo>>;
 
   beforeAll(async () => {
-    datasetRoot = realpathSync(mkdtempSync(join(tmpdir(), "sessionlore-demo-dataset-")));
+    datasetRoot = realpathSync(mkdtempSync(join(tmpdir(), "habitlore-demo-dataset-")));
     datasetHome = FixtureHome.create();
     demo = await startDemo(datasetHome, datasetRoot);
   }, SLOW);
@@ -103,7 +103,7 @@ describe("the demo dataset", { timeout: SLOW }, () => {
   });
 });
 
-describe("sessionlore demo", { timeout: SLOW }, () => {
+describe("habitlore demo", { timeout: SLOW }, () => {
   it("serves the demo dashboard with no Model Provider, no Harness data and no store of the person's own", async () => {
     const before = snapshotTree(home.path);
 
@@ -135,14 +135,14 @@ describe("sessionlore demo", { timeout: SLOW }, () => {
   it("never mixes with the person's real store", async () => {
     writeClaudeSession(home, { cwd: home.gitRepo("code/mine"), startedAt: "2026-05-04T09:00:00.000Z", turns: [turn.user("my own work")] });
     expect((await runCli(home, ["scan"])).exitCode).toBe(0);
-    const store = snapshotTree(home.resolve(".sessionlore"));
+    const store = snapshotTree(home.resolve(".habitlore"));
 
     const running = await startDemo(home, root);
     const sessions = await (await fetch(new URL("/api/sessions", running.url))).json();
     await running.stop();
 
     expect(sessions.sessions.some((s: any) => s.project?.name === "mine")).toBe(false);
-    expect(snapshotTree(home.resolve(".sessionlore"))).toEqual(store);
+    expect(snapshotTree(home.resolve(".habitlore"))).toEqual(store);
     expect((await runCli(home, ["sessions", "--json"])).json().sessions).toHaveLength(1);
   });
 });

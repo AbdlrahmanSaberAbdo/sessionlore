@@ -5,7 +5,7 @@ import { bubble, writeCursorDatabase, type CursorBubble } from "./cursor.js";
 import type { FixtureHome } from "./home.js";
 
 /**
- * The demo dataset (`sessionlore demo`): made-up Claude Code and Cursor
+ * The demo dataset (`habitlore demo`): made-up Claude Code and Cursor
  * Sessions, written with the same builders the tests use, that contain
  * repeated Workflows, a near-Workflow, a Correction Cluster and a near one.
  *

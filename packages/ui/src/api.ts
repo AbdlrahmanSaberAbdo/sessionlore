@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 /**
  * Reads the dashboard's JSON API. Response types are the App's own types from
- * @sessionlore/core (type-only imports, so no core code reaches the browser).
+ * @habitlore/core (type-only imports, so no core code reaches the browser).
  */
 
 export type Loaded<T> = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; data: T };

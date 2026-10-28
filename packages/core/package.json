@@ -1,12 +1,12 @@
 {
-  "name": "@sessionlore/core",
+  "name": "@habitlore/core",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@sessionlore/analysis": "workspace:*",
+    "@habitlore/analysis": "workspace:*",
     "ai": "7.0.152"
   }
 }

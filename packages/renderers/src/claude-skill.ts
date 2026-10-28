@@ -6,7 +6,7 @@ import {
   type Renderer,
   type Scope,
   type SkillSuggestion,
-} from "@sessionlore/core";
+} from "@habitlore/core";
 
 /**
  * The Claude Skill Renderer: a Skill Suggestion becomes a skill folder holding
@@ -58,7 +58,7 @@ export const claudeSkillRenderer: Renderer = {
     const name = claudeSkillName(suggestion);
     const path = join(claudeSkillDir(suggestion.scope, homeDir), name, "SKILL.md");
     if (readFile(path) !== null) {
-      throw new RenderError(`A skill named ${name} already exists at ${path}; sessionlore won't overwrite it.`);
+      throw new RenderError(`A skill named ${name} already exists at ${path}; habitlore won't overwrite it.`);
     }
     return [{ path, content: skillMarkdown(name, suggestion, []) }];
   },

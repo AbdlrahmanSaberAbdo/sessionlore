@@ -8,7 +8,7 @@ if (versionProblem) {
   process.exit(1);
 }
 
-// node:sqlite is stable enough for sessionlore's use; hide its ExperimentalWarning.
+// node:sqlite is stable enough for habitlore's use; hide its ExperimentalWarning.
 const emitWarning = process.emitWarning.bind(process);
 process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
   const text = typeof warning === "string" ? warning : warning.message;
@@ -16,11 +16,11 @@ process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
   (emitWarning as (...args: unknown[]) => void)(warning, ...rest);
 }) as typeof process.emitWarning;
 
-// The AI SDK logs a console warning per call for settings a model ignores; sessionlore reports failures itself.
+// The AI SDK logs a console warning per call for settings a model ignores; habitlore reports failures itself.
 (globalThis as { AI_SDK_LOG_WARNINGS?: boolean }).AI_SDK_LOG_WARNINGS = false;
 
 const { main } = await import("./main.js");
-const { systemClock } = await import("@sessionlore/core");
+const { systemClock } = await import("@habitlore/core");
 const { localEmbedder } = await import("./local-embedder.js");
 
 const { createInterface } = await import("node:readline/promises");

@@ -1,19 +1,19 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { HarnessId, HarnessMessage, HarnessSession, TokenUsage } from "../adapter.js";
-import type { Intent, SplitTask } from "@sessionlore/analysis";
+import type { Intent, SplitTask } from "@habitlore/analysis";
 import type { ResolvedProject } from "../project.js";
 import type { Evidence, PluginSkillRef, PriorSuggestion, Scope, Suggestion, SuggestionKind, SuggestionState, Target } from "../suggestion.js";
 import { openDatabase, type Database, type SqlValue } from "./database.js";
 import { migrate } from "./migrations.js";
 
-/** sessionlore's local data folder inside a home directory. */
+/** habitlore's local data folder inside a home directory. */
 export function dataDir(homeDir: string): string {
-  return join(homeDir, ".sessionlore");
+  return join(homeDir, ".habitlore");
 }
 
 export function storePath(homeDir: string): string {
-  return join(dataDir(homeDir), "sessionlore.db");
+  return join(dataDir(homeDir), "habitlore.db");
 }
 
 export interface StoredSession {
@@ -203,7 +203,7 @@ export interface SaveSessionInput {
   scanId: number;
 }
 
-/** The local store. All reads and writes of sessionlore's own data go through here. */
+/** The local store. All reads and writes of habitlore's own data go through here. */
 export class Store {
   private constructor(private readonly db: Database) {}
 

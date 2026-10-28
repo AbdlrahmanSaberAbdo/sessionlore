@@ -1,6 +1,6 @@
 # v2 plan
 
-Work deliberately left out of v1. v1 succeeds when sessionlore finds a repeated workflow and drafts a skill you actually keep; everything here builds on that.
+Work deliberately left out of v1. v1 succeeds when habitlore finds a repeated workflow and drafts a skill you actually keep; everything here builds on that.
 
 Each item says why it waits.
 

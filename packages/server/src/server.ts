@@ -1,4 +1,4 @@
-import type { App } from "@sessionlore/core";
+import type { App } from "@habitlore/core";
 import { Hono } from "hono";
 import { apiRoutes } from "./api.js";
 import { serveUi } from "./static.js";

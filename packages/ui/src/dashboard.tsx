@@ -8,7 +8,7 @@ import type {
   SuggestionReview,
   WorkflowDetail,
   WorkflowList,
-} from "@sessionlore/core";
+} from "@habitlore/core";
 import { useEffect, useState, type ReactNode } from "react";
 import { sendJson, useApi, type Loaded } from "./api.js";
 import { filterQuery, navigate, parseFilter, useLocation } from "./router.js";
@@ -124,7 +124,7 @@ function ReviewPage({ id }: { id: string }) {
     setScope: (choice) => act(() => sendJson("PUT", `${path}/scope`, choice).then(() => "Scope changed."))(),
     accept: act(async () => {
       const result = await sendJson<AcceptResult>("POST", `${path}/accept`);
-      const backedUp = result.backups.length > 0 ? ` Backed up ${result.backups.length} existing file(s); \`sessionlore restore ${id}\` puts them back.` : "";
+      const backedUp = result.backups.length > 0 ? ` Backed up ${result.backups.length} existing file(s); \`habitlore restore ${id}\` puts them back.` : "";
       return `Accepted. Wrote ${result.files.map((f) => f.path).join(", ")}.${backedUp}`;
     }),
     reject: act(() => sendJson("POST", `${path}/reject`).then(() => "Rejected. It won't be suggested again.")),
@@ -167,12 +167,12 @@ export function Dashboard() {
   const matched = route(path);
   const section = "/" + (path.split("/")[1] ?? "");
   useEffect(() => {
-    document.title = matched ? `${matched.screen.title} · sessionlore` : "sessionlore";
+    document.title = matched ? `${matched.screen.title} · habitlore` : "habitlore";
   }, [matched?.screen]);
   return (
     <>
       <header className="top">
-        <span className="brand">sessionlore</span>
+        <span className="brand">habitlore</span>
         <nav>
           {screens
             .filter((s) => s.nav)

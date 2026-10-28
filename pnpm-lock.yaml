@@ -8,22 +8,22 @@ importers:
 
   .:
     devDependencies:
-      '@sessionlore/adapters':
+      '@habitlore/adapters':
         specifier: workspace:*
         version: link:packages/adapters
-      '@sessionlore/analysis':
+      '@habitlore/analysis':
         specifier: workspace:*
         version: link:packages/analysis
-      '@sessionlore/core':
+      '@habitlore/core':
         specifier: workspace:*
         version: link:packages/core
-      '@sessionlore/fixtures':
+      '@habitlore/fixtures':
         specifier: workspace:*
         version: link:packages/fixtures
-      '@sessionlore/renderers':
+      '@habitlore/renderers':
         specifier: workspace:*
         version: link:packages/renderers
-      '@sessionlore/server':
+      '@habitlore/server':
         specifier: workspace:*
         version: link:packages/server
       '@types/node':
@@ -41,7 +41,7 @@ importers:
 
   packages/adapters:
     dependencies:
-      '@sessionlore/core':
+      '@habitlore/core':
         specifier: workspace:*
         version: link:../core
 
@@ -89,7 +89,7 @@ importers:
 
   packages/core:
     dependencies:
-      '@sessionlore/analysis':
+      '@habitlore/analysis':
         specifier: workspace:*
         version: link:../analysis
       ai:
@@ -100,25 +100,25 @@ importers:
 
   packages/renderers:
     dependencies:
-      '@sessionlore/core':
+      '@habitlore/core':
         specifier: workspace:*
         version: link:../core
 
   packages/server:
     dependencies:
+      '@habitlore/core':
+        specifier: workspace:*
+        version: link:../core
       '@hono/node-server':
         specifier: 2.1.5
         version: 2.1.5(hono@4.13.13)
-      '@sessionlore/core':
-        specifier: workspace:*
-        version: link:../core
       hono:
         specifier: 4.13.13
         version: 4.13.13
 
   packages/ui:
     devDependencies:
-      '@sessionlore/core':
+      '@habitlore/core':
         specifier: workspace:*
         version: link:../core
       '@types/react':

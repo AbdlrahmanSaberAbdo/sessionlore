@@ -1,4 +1,4 @@
-import type { Intent, RepeatRule } from "@sessionlore/analysis";
+import type { Intent, RepeatRule } from "@habitlore/analysis";
 import type { HarnessId } from "./adapter.js";
 import type { ClusterTask, StoredMessage, StoredSession } from "./store/store.js";
 import type { CorrectionsPerTask } from "./measuring.js";

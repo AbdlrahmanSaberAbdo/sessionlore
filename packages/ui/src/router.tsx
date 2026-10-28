@@ -1,4 +1,4 @@
-import type { BrowseFilter } from "@sessionlore/core";
+import type { BrowseFilter } from "@habitlore/core";
 import { useEffect, useState, type ReactNode } from "react";
 
 /** Client-side navigation: the server answers every UI path with index.html. */

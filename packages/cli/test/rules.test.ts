@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { topicEmbedder } from "./support/embedder.js";
 import { fixedClock, runCli, type RunOptions } from "./support/harness.js";
 import { scriptedModelProvider } from "./support/model-provider.js";
@@ -177,7 +177,7 @@ describe("suggest Rules", () => {
 });
 
 describe("accept a Rule", () => {
-  it("creates the Project's CLAUDE.md with a section sessionlore manages, holding the Rule", async () => {
+  it("creates the Project's CLAUDE.md with a section habitlore manages, holding the Rule", async () => {
     const shop = home.gitRepo("code/shop");
     pnpmCorrectionsIn(shop);
     const opts = options();
@@ -192,11 +192,11 @@ describe("accept a Rule", () => {
     expect(result.json()).toMatchObject({ suggestion: { id, state: "Accepted" }, files: [{ path: file }] });
     expect(readFileSync(file, "utf8")).toBe(
       [
-        "<!-- sessionlore:rules:start -->",
-        "## Rules from sessionlore",
+        "<!-- habitlore:rules:start -->",
+        "## Rules from habitlore",
         "",
         "- Use pnpm, never npm, to install packages and run scripts.",
-        "<!-- sessionlore:rules:end -->",
+        "<!-- habitlore:rules:end -->",
         "",
       ].join("\n"),
     );
@@ -225,11 +225,11 @@ describe("accept a Rule", () => {
       [
         "",
         "",
-        "<!-- sessionlore:rules:start -->",
-        "## Rules from sessionlore",
+        "<!-- habitlore:rules:start -->",
+        "## Rules from habitlore",
         "",
         "- Use pnpm, never npm, to install packages and run scripts.",
-        "<!-- sessionlore:rules:end -->",
+        "<!-- habitlore:rules:end -->",
         "",
       ].join("\n"),
     );
@@ -253,7 +253,7 @@ describe("accept a Rule", () => {
     const byTitle = new Map((await review()).map((s: any) => [s.title, s.id]));
 
     expect((await runCli(home, ["accept", String(byTitle.get("Use pnpm"))], opts)).exitCode).toBe(0);
-    // The person writes more after sessionlore's section.
+    // The person writes more after habitlore's section.
     writeFileSync(file, readFileSync(file, "utf8") + "\n## Notes\n\nDeploys are on Fridays.\n");
     const second = await runCli(home, ["accept", String(byTitle.get("Indent with tabs"))], opts);
 
@@ -264,12 +264,12 @@ describe("accept a Rule", () => {
         "",
         "Run tests with `make test`.",
         "",
-        "<!-- sessionlore:rules:start -->",
-        "## Rules from sessionlore",
+        "<!-- habitlore:rules:start -->",
+        "## Rules from habitlore",
         "",
         "- Use pnpm, never npm, to install packages and run scripts.",
         "- Indent with tabs, not spaces.",
-        "<!-- sessionlore:rules:end -->",
+        "<!-- habitlore:rules:end -->",
         "",
         "## Notes",
         "",

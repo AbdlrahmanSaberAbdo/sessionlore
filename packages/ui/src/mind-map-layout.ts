@@ -1,4 +1,4 @@
-import type { MindMap, MindMapNode } from "@sessionlore/core";
+import type { MindMap, MindMapNode } from "@habitlore/core";
 
 /**
  * Lays the mind map out left to right, one column per level (Project,

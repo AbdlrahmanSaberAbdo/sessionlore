@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { topicEmbedder } from "./support/embedder.js";
 import { fixedClock, runCli, writeConfig, type CliResult, type RunOptions } from "./support/harness.js";
 import { scriptedModelProvider } from "./support/model-provider.js";
@@ -98,8 +98,8 @@ describe("run", { timeout: SLOW }, () => {
     expect(result.stdout).toMatch(/^ {2}Claude Code +~\/\.claude\/projects +3 Sessions, 3 new$/m);
     expect(result.stderr).toContain('"modelProvider"');
     expect(result.stderr).toContain('"apiKeyEnv": "ANTHROPIC_API_KEY"');
-    expect(result.stderr).toContain("export SESSIONLORE_PROVIDER=");
-    expect(result.stderr).toContain("export SESSIONLORE_API_KEY=");
+    expect(result.stderr).toContain("export HABITLORE_PROVIDER=");
+    expect(result.stderr).toContain("export HABITLORE_API_KEY=");
     expect(await storedSessions()).toEqual(["2026-05-28", "2026-05-24", "2026-05-20"]);
   });
 
@@ -188,7 +188,7 @@ describe("run", { timeout: SLOW }, () => {
     expect("exited" in started).toBe(true);
     const result = (started as { exited: CliResult }).exited;
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("`sessionlore run --yes`");
+    expect(result.stderr).toContain("`habitlore run --yes`");
     expect(opts.requests()).toEqual([]);
     expect(await storedSessions()).toHaveLength(3);
   });
@@ -329,7 +329,7 @@ describe("run explains what it did", { timeout: SLOW }, () => {
   });
 });
 
-describe("sessionlore with no command", { timeout: SLOW }, () => {
+describe("habitlore with no command", { timeout: SLOW }, () => {
   it("runs `run` with the defaults", async () => {
     repeatedWorkflow();
 

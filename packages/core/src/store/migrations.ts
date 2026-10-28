@@ -300,7 +300,7 @@ export function migrate(db: Database, all: readonly Migration[] = migrations): v
   const latest = all.at(-1)?.version ?? 0;
   if (current > latest) {
     throw new Error(
-      `The sessionlore store is at schema version ${current}, newer than this version of sessionlore supports (${latest}). Upgrade sessionlore.`,
+      `The habitlore store is at schema version ${current}, newer than this version of habitlore supports (${latest}). Upgrade habitlore.`,
     );
   }
   for (const migration of all) {

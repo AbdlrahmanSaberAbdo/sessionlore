@@ -1,6 +1,6 @@
 import { appendFileSync, utimesSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { runCli, writeConfig } from "./support/harness.js";
 import { scriptedModelProvider } from "./support/model-provider.js";
 

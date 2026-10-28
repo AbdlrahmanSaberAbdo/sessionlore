@@ -1,5 +1,5 @@
 {
-  "name": "@sessionlore/ui",
+  "name": "@habitlore/ui",
   "private": true,
   "type": "module",
   "scripts": {
@@ -7,7 +7,7 @@
     "dev": "vite"
   },
   "devDependencies": {
-    "@sessionlore/core": "workspace:*",
+    "@habitlore/core": "workspace:*",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@xyflow/react": "12.12.0",

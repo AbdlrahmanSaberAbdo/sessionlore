@@ -11,7 +11,7 @@ import type {
   HarnessUserMessage,
   SessionSource,
   TokenUsage,
-} from "@sessionlore/core";
+} from "@habitlore/core";
 
 /**
  * Reads Claude Code's per-project JSONL Session files:
@@ -21,7 +21,7 @@ import type {
  * belong to that Session. Files are only ever opened for reading.
  */
 /**
- * Part of every change marker, so Sessions are read again after a sessionlore
+ * Part of every change marker, so Sessions are read again after a habitlore
  * update changes what this Adapter reads from them. Bump it when that happens.
  */
 const READER_VERSION = "claude-code-reader-5";
@@ -125,7 +125,7 @@ type JsonRecord = Record<string, unknown>;
 
 /**
  * Every record type Claude Code is known to write. Only `user` and `assistant`
- * carry the conversation; the rest are metadata sessionlore does not need.
+ * carry the conversation; the rest are metadata habitlore does not need.
  * Anything else is counted and reported, never silently skipped (ADR 0001).
  */
 const KNOWN_RECORD_TYPES = new Set([

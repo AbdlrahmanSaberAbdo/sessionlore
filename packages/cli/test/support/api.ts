@@ -1,11 +1,11 @@
-import type { FixtureHome } from "@sessionlore/fixtures";
-import { createServer } from "@sessionlore/server";
+import type { FixtureHome } from "@habitlore/fixtures";
+import { createServer } from "@habitlore/server";
 import { openApp } from "../../src/index.js";
 import { fixedClock, type RunOptions } from "./harness.js";
 
 /**
  * Seam 2: the dashboard's HTTP API, called in-process without opening a port.
- * The server is wired exactly as `sessionlore serve` wires it, against the same
+ * The server is wired exactly as `habitlore serve` wires it, against the same
  * fixture home directories Seam 1 uses, so a test can build data through the
  * CLI and read it back through the API.
  */

@@ -1,4 +1,4 @@
-import type { ReviewQueue, Scope, ScopeChoice, SuggestionForm, SuggestionReview } from "@sessionlore/core";
+import type { ReviewQueue, Scope, ScopeChoice, SuggestionForm, SuggestionReview } from "@habitlore/core";
 import { useState } from "react";
 import { harnessName, plural } from "../components/filters.js";
 import { Link, sessionPath, suggestionPath } from "../router.js";
@@ -11,7 +11,7 @@ export function ReviewQueueScreen({ queue }: { queue: ReviewQueue }) {
       <section className="panel">
         {queue.suggestions.length === 0 ? (
           <p className="muted">
-            No Pending Suggestions. Run <code>sessionlore suggest</code> to write some.
+            No Pending Suggestions. Run <code>habitlore suggest</code> to write some.
           </p>
         ) : (
           <table className="list">

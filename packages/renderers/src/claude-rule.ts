@@ -1,15 +1,15 @@
 import { join } from "node:path";
-import { RenderError, type Renderer, type Scope } from "@sessionlore/core";
+import { RenderError, type Renderer, type Scope } from "@habitlore/core";
 
 /**
  * The Claude Rule Renderer: a Rule Suggestion becomes a bullet in a section of
- * the Scope's `CLAUDE.md` that sessionlore manages. Everything outside that
+ * the Scope's `CLAUDE.md` that habitlore manages. Everything outside that
  * section is left byte-for-byte as it was.
  */
 
-export const RULES_START = "<!-- sessionlore:rules:start -->";
-export const RULES_END = "<!-- sessionlore:rules:end -->";
-const HEADING = "## Rules from sessionlore";
+export const RULES_START = "<!-- habitlore:rules:start -->";
+export const RULES_END = "<!-- habitlore:rules:end -->";
+const HEADING = "## Rules from habitlore";
 
 /** The `CLAUDE.md` for a Scope: `<project>/CLAUDE.md` or `~/.claude/CLAUDE.md`. */
 export function claudeMdPath(scope: Scope, homeDir: string): string {
@@ -70,7 +70,7 @@ function withRule(content: string | null, bullet: string, path: string): string 
     return content + separator + section(`${bullet}\n`);
   }
   if (start === -1 || end === -1 || end < start || content.indexOf(RULES_START, start + 1) !== -1) {
-    throw new RenderError(`The section sessionlore manages in ${path} is damaged; fix or remove its markers and accept again.`);
+    throw new RenderError(`The section habitlore manages in ${path} is damaged; fix or remove its markers and accept again.`);
   }
   const inside = content.slice(start, end);
   if (inside.split("\n").includes(bullet)) return content; // already there

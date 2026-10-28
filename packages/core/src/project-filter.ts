@@ -3,7 +3,7 @@ import type { SectionContext } from "./config.js";
 import type { ResolvedProject } from "./project.js";
 
 /**
- * Decides which Projects sessionlore may store and show, from the config's
+ * Decides which Projects habitlore may store and show, from the config's
  * `projects.include` and `projects.exclude` lists. An entry is either a
  * Project name (`"shop"`) or a path glob (anything containing `/` or starting
  * with `~`). Exclude always wins; when an include list is set, only Projects

@@ -1,4 +1,4 @@
-import type { BrowseFilter, WorkflowDetail, WorkflowList, WorkflowSummary, NearWorkflowSummary } from "@sessionlore/core";
+import type { BrowseFilter, WorkflowDetail, WorkflowList, WorkflowSummary, NearWorkflowSummary } from "@habitlore/core";
 import { FilterBar, harnessName, plural } from "../components/filters.js";
 import { filterQuery, Link, sessionPath } from "../router.js";
 

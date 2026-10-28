@@ -46,7 +46,7 @@ export function openDatabase(path: string): Database {
   };
 }
 
-/** Read access to a database sessionlore does not own, such as Harness storage. */
+/** Read access to a database habitlore does not own, such as Harness storage. */
 export interface ReadOnlyDatabase {
   get<T extends Row = Row>(sql: string, ...params: SqlValue[]): T | undefined;
   all<T extends Row = Row>(sql: string, ...params: SqlValue[]): T[];

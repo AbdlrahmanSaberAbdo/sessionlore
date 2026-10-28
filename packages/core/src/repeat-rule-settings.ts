@@ -1,4 +1,4 @@
-import { defaultRepeatRule, type RepeatRule } from "@sessionlore/analysis";
+import { defaultRepeatRule, type RepeatRule } from "@habitlore/analysis";
 import { isPlainObject, type SectionContext } from "./config.js";
 
 /** The config file's `repeatRule` section. Each setting is optional and falls back to the default. */

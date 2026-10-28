@@ -1,12 +1,12 @@
-import { allAdapters } from "@sessionlore/adapters";
-import { App, storePath, type Clock, type Embedder, type ModelProvider } from "@sessionlore/core";
-import { demoTopic, demoTopics, FixtureHome, writeDemoHarnessData } from "@sessionlore/fixtures";
-import { allRenderers } from "@sessionlore/renderers";
+import { allAdapters } from "@habitlore/adapters";
+import { App, storePath, type Clock, type Embedder, type ModelProvider } from "@habitlore/core";
+import { demoTopic, demoTopics, FixtureHome, writeDemoHarnessData } from "@habitlore/fixtures";
+import { allRenderers } from "@habitlore/renderers";
 import { MockLanguageModelV4 } from "ai/test";
 
 /**
- * `sessionlore demo`: the dashboard on a made-up history, so a visitor can see
- * sessionlore working without their own Sessions or a Model Provider.
+ * `habitlore demo`: the dashboard on a made-up history, so a visitor can see
+ * habitlore working without their own Sessions or a Model Provider.
  *
  * Each run writes the demo dataset (the fixture builders' Claude Code and
  * Cursor Sessions) into a fresh throwaway home directory and runs the real
@@ -31,7 +31,7 @@ export interface Demo {
 }
 
 export async function openDemo({ root, clock }: DemoOptions): Promise<Demo> {
-  const home = FixtureHome.create("sessionlore-demo-", root);
+  const home = FixtureHome.create("habitlore-demo-", root);
   let app: App | undefined;
   try {
     writeDemoHarnessData(home, clock.now());
@@ -75,7 +75,7 @@ function demoEmbedder(): Embedder {
   const randomDims = 64;
   const topicDims = demoTopics.length;
   return {
-    modelId: "sessionlore-demo-embedder",
+    modelId: "habitlore-demo-embedder",
     async embed(texts) {
       return texts.map((text) => {
         const vector = new Array<number>(topicDims + randomDims).fill(0);
@@ -116,7 +116,7 @@ function demoModelProvider(): ModelProvider {
         warnings: [],
       }),
     });
-  return { cheap: model("sessionlore-demo"), strong: model("sessionlore-demo") };
+  return { cheap: model("habitlore-demo"), strong: model("habitlore-demo") };
 }
 
 function demoReply(request: string): object {

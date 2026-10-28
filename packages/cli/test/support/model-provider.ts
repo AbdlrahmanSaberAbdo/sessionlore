@@ -1,4 +1,4 @@
-import type { ModelProvider } from "@sessionlore/core";
+import type { ModelProvider } from "@habitlore/core";
 import { MockLanguageModelV4 } from "ai/test";
 
 /**

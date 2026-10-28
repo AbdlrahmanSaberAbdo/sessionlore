@@ -26,7 +26,7 @@ import {
   type RepeatRuleResult,
   type TokenCount,
   type WorkflowForSkill,
-} from "@sessionlore/analysis";
+} from "@habitlore/analysis";
 import { correctionsPerWeek, TOP_WORKFLOWS, type Overview } from "./overview.js";
 import {
   distinct,
@@ -1694,7 +1694,7 @@ function unrecognizedWarnings(adapter: Adapter, tally: Map<string, number>): str
     .map(([shape, n]) => `${shape}: ${n}`)
     .join(", ");
   return [
-    `${adapter.displayName}: skipped ${total} ${total === 1 ? "record" : "records"} sessionlore does not recognise (${shapes}). ` +
-      `${adapter.displayName} may have changed its storage format; please report this so sessionlore can read it.`,
+    `${adapter.displayName}: skipped ${total} ${total === 1 ? "record" : "records"} habitlore does not recognise (${shapes}). ` +
+      `${adapter.displayName} may have changed its storage format; please report this so habitlore can read it.`,
   ];
 }

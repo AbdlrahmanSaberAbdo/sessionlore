@@ -2,8 +2,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
-import { allAdapters } from "@sessionlore/adapters";
-import { allRenderers } from "@sessionlore/renderers";
+import { allAdapters } from "@habitlore/adapters";
+import { allRenderers } from "@habitlore/renderers";
 import {
   App,
   type AnalysisEstimate,
@@ -26,8 +26,8 @@ import {
   type Renderer,
   type Scope,
   wholeNumber,
-} from "@sessionlore/core";
-import { createServer, listen } from "@sessionlore/server";
+} from "@habitlore/core";
+import { createServer, listen } from "@habitlore/server";
 import { resolveModelProvider, type ModelProviderResolution } from "./model-provider.js";
 import { openDemo } from "./demo.js";
 import { openInEditor } from "./editor.js";
@@ -52,13 +52,13 @@ export interface CliEnvironment {
   clock: Clock;
   modelProvider?: ModelProvider;
   embedder?: Embedder;
-  /** Defaults to every Adapter sessionlore ships. */
+  /** Defaults to every Adapter habitlore ships. */
   adapters?: readonly Adapter[];
   /** Opens a URL in the person's browser; `serve` only prints the address without it. */
   openBrowser?: (url: string) => void;
   /** Folder of the built dashboard UI that `serve` ships. */
   uiDir?: string;
-  /** Defaults to every Renderer sessionlore ships. */
+  /** Defaults to every Renderer habitlore ships. */
   renderers?: readonly Renderer[];
   /** Opens a file in the person's editor and resolves once they close it. Defaults to $VISUAL or $EDITOR. */
   editFile?: (path: string) => Promise<void>;
@@ -84,7 +84,7 @@ interface CommandContext {
   warn(text: string): void;
   /** Opens a file in the person's editor and resolves once they close it. */
   editFile(path: string): Promise<void>;
-  /** sessionlore's data folder, for scratch files such as one being edited. */
+  /** habitlore's data folder, for scratch files such as one being edited. */
   dataDir: string;
   /** `--last N`: limit a Scan to the N most recent Sessions. */
   last?: number;
@@ -108,7 +108,7 @@ interface ScanWindow {
   harnesses?: string[];
 }
 
-/** How far back `run` (and bare `sessionlore`) scans unless `--since` says otherwise. */
+/** How far back `run` (and bare `habitlore`) scans unless `--since` says otherwise. */
 const DEFAULT_RUN_WINDOW = "30d";
 
 interface Command {
@@ -125,7 +125,7 @@ const commands: Record<string, Command> = {
       if (options.showRedacted !== undefined) {
         const request = app.redactedRequest(options.showRedacted);
         if (request === null) {
-          err(`No Session with id ${options.showRedacted}. Run \`sessionlore sessions\` to list them.\n`);
+          err(`No Session with id ${options.showRedacted}. Run \`habitlore sessions\` to list them.\n`);
           return 1;
         }
         return out(request + "\n");
@@ -156,7 +156,7 @@ const commands: Record<string, Command> = {
       if (result.interrupted) {
         out(
           `Interrupted. ${result.remaining} ${plural(result.remaining, "Session")} left; ` +
-            "run `sessionlore analyze` again to pick up where this stopped.\n",
+            "run `habitlore analyze` again to pick up where this stopped.\n",
         );
       }
       out(`${result.analyzed.length} ${plural(result.analyzed.length, "Session")} analyzed\n`);
@@ -173,7 +173,7 @@ const commands: Record<string, Command> = {
     run({ app, json, out }) {
       const sessions = app.listTasks();
       if (json) return out(JSON.stringify({ sessions }, null, 2) + "\n");
-      if (sessions.length === 0) return out("No Sessions analyzed yet. Run `sessionlore analyze` first.\n");
+      if (sessions.length === 0) return out("No Sessions analyzed yet. Run `habitlore analyze` first.\n");
       for (const s of sessions) {
         out(`${s.id}  ${s.project?.name ?? "(no Project)"}\n`);
         for (const t of s.tasks) {
@@ -235,7 +235,7 @@ const commands: Record<string, Command> = {
           if (analysis.interrupted) {
             say(
               `Interrupted. ${analysis.analyzed.length} ${plural(analysis.analyzed.length, "Session")} analyzed and kept, ` +
-                `${analysis.remaining} left; run \`sessionlore run\` again to pick up where this stopped.\n`,
+                `${analysis.remaining} left; run \`habitlore run\` again to pick up where this stopped.\n`,
             );
             reportUsage(say, analysis.usage);
             return interruptedExitCode;
@@ -303,7 +303,7 @@ const commands: Record<string, Command> = {
       const { minMembers, minSessions, windowDays } = result.repeatRule;
       out(`Repeat Rule: ${minMembers} Tasks across ${minSessions} Sessions within ${windowDays} days\n`);
       if (result.workflows.length === 0 && result.nearWorkflows.length === 0) {
-        return out("No Workflows yet. Run `sessionlore analyze` after a few more Sessions.\n");
+        return out("No Workflows yet. Run `habitlore analyze` after a few more Sessions.\n");
       }
       for (const w of result.workflows) {
         out(`\n${w.name}  (${w.counted.tasks} Tasks in ${w.counted.sessions} Sessions)\n`);
@@ -317,9 +317,9 @@ const commands: Record<string, Command> = {
     summary: "Show one Workflow or Cluster with its Tasks: workflow <id>",
     run({ app, json, args, out }) {
       const id = wholeNumber(args[0]);
-      if (id === null) throw new Error("Which Workflow? Usage: sessionlore workflow <id>");
+      if (id === null) throw new Error("Which Workflow? Usage: habitlore workflow <id>");
       const workflow = app.getWorkflow(id);
-      if (!workflow) throw new Error(`No Workflow has id ${id}. Run \`sessionlore workflows\` to list them.`);
+      if (!workflow) throw new Error(`No Workflow has id ${id}. Run \`habitlore workflows\` to list them.`);
       if (json) return out(JSON.stringify({ workflow }, null, 2) + "\n");
       out(`${workflow.name}  (${workflow.counted.tasks} Tasks in ${workflow.counted.sessions} Sessions)\n`);
       for (const t of workflow.tasks) out(`  ${t.at.slice(0, 10)}  ${t.harness}  ${t.title}\n`);
@@ -346,7 +346,7 @@ const commands: Record<string, Command> = {
         ["Correction Clusters", result.corrections],
       ] as const;
       if (sections.every(([, s]) => s.mapped.length === 0 && s.created.length === 0)) {
-        return out("No Clusters yet. Run `sessionlore analyze` first.\n");
+        return out("No Clusters yet. Run `habitlore analyze` first.\n");
       }
       for (const [title, { mapped, created }] of sections) {
         if (mapped.length === 0 && created.length === 0) continue;
@@ -383,7 +383,7 @@ const commands: Record<string, Command> = {
       out(`${result.created.length} ${plural(result.created.length, "Suggestion")} written\n`);
       for (const f of result.failed) out(`  ${failedSource(f)} failed: ${f.error}\n`);
       reportUsage(out, result.usage);
-      if (result.created.length > 0) out("Run `sessionlore review` to see them.\n");
+      if (result.created.length > 0) out("Run `habitlore review` to see them.\n");
     },
   },
   review: {
@@ -391,7 +391,7 @@ const commands: Record<string, Command> = {
     run({ app, json, out }) {
       const suggestions = app.listSuggestions("Pending").map((s) => ({ ...s, diff: targetDiff(app, s) }));
       if (json) return out(JSON.stringify({ suggestions }, null, 2) + "\n");
-      if (suggestions.length === 0) return out("No Pending Suggestions. Run `sessionlore suggest` to write some.\n");
+      if (suggestions.length === 0) return out("No Pending Suggestions. Run `habitlore suggest` to write some.\n");
       for (const s of suggestions) {
         const scope = scopeLabel(s.scope);
         out(`#${s.id}  ${s.kind === "skill" ? "Skill" : "Rule"}: ${s.title}  [${scope}]\n`);
@@ -412,7 +412,7 @@ const commands: Record<string, Command> = {
         }
         out("\n");
       }
-      out("Accept with `sessionlore accept <id>`, or reject with `sessionlore reject <id>`. Change one first with `sessionlore edit <id>` or `sessionlore scope <id> user|project`.\n");
+      out("Accept with `habitlore accept <id>`, or reject with `habitlore reject <id>`. Change one first with `habitlore edit <id>` or `habitlore scope <id> user|project`.\n");
     },
   },
   accept: {
@@ -423,7 +423,7 @@ const commands: Record<string, Command> = {
       out(`Accepted #${result.suggestion.id} ${result.suggestion.title}. Wrote:\n`);
       for (const file of result.files) out(`  ${file.path}\n`);
       if (result.backups.length > 0) {
-        out(`Backed up the previous ${plural(result.backups.length, "version")}; undo with \`sessionlore restore ${result.suggestion.id}\`.\n`);
+        out(`Backed up the previous ${plural(result.backups.length, "version")}; undo with \`habitlore restore ${result.suggestion.id}\`.\n`);
       }
     },
   },
@@ -475,7 +475,7 @@ const commands: Record<string, Command> = {
       const id = suggestionId(args, "scope");
       const [, kind, folder] = args;
       if (kind !== "user" && kind !== "project") {
-        throw new Error("Which Scope? Usage: sessionlore scope <id> user, or sessionlore scope <id> project [folder]");
+        throw new Error("Which Scope? Usage: habitlore scope <id> user, or habitlore scope <id> project [folder]");
       }
       const result = app.setScope(id, kind === "user" ? { kind } : { kind, folder: folder && resolve(folder) });
       if (json) return out(JSON.stringify(result, null, 2) + "\n");
@@ -495,7 +495,7 @@ const commands: Record<string, Command> = {
       const { minMembers, minSessions, windowDays } = result.repeatRule;
       out(`Repeat Rule: ${minMembers} Corrections across ${minSessions} Sessions within ${windowDays} days\n`);
       if (result.correctionClusters.length === 0 && result.nearCorrectionClusters.length === 0) {
-        return out("No Correction Clusters yet. Run `sessionlore analyze` after a few more Sessions.\n");
+        return out("No Correction Clusters yet. Run `habitlore analyze` after a few more Sessions.\n");
       }
       for (const c of result.correctionClusters) {
         out(`\n${c.name}  (${c.counted.corrections} Corrections in ${c.counted.sessions} Sessions)\n`);
@@ -512,7 +512,7 @@ const commands: Record<string, Command> = {
     run({ app, json, out }) {
       const sessions = app.listSessions();
       if (json) return out(JSON.stringify({ sessions }, null, 2) + "\n");
-      if (sessions.length === 0) return out("No Sessions stored yet. Run `sessionlore scan` first.\n");
+      if (sessions.length === 0) return out("No Sessions stored yet. Run `habitlore scan` first.\n");
       for (const s of sessions) {
         out(`${s.startedAt}  ${s.harness}  ${s.project?.name ?? "(no Project)"}  ${s.userMessageCount} messages  ${s.id}\n`);
       }
@@ -525,7 +525,7 @@ const commands: Record<string, Command> = {
         app,
         serve,
         signal,
-        (url) => (json ? out(JSON.stringify({ url }, null, 2) + "\n") : out(`sessionlore dashboard: ${url}\n`)),
+        (url) => (json ? out(JSON.stringify({ url }, null, 2) + "\n") : out(`habitlore dashboard: ${url}\n`)),
         json ? err : out,
       );
     },
@@ -547,9 +547,9 @@ const commands: Record<string, Command> = {
     summary: "Show one stored Session with its messages: session <id>",
     run({ app, json, args, out }) {
       const [id] = args;
-      if (!id) throw new Error("Which Session? Usage: sessionlore session <id>");
+      if (!id) throw new Error("Which Session? Usage: habitlore session <id>");
       const session = app.getSession(id);
-      if (!session) throw new Error(`No stored Session has id ${id}. Run \`sessionlore sessions\` to list them.`);
+      if (!session) throw new Error(`No stored Session has id ${id}. Run \`habitlore sessions\` to list them.`);
       if (json) return out(JSON.stringify({ session }, null, 2) + "\n");
       out(`${session.harness}  ${session.project?.name ?? "(no Project)"}  ${session.startedAt}  ${session.model ?? ""}\n\n`);
       for (const m of session.messages) {
@@ -584,7 +584,7 @@ const standaloneCommands: Record<string, { summary: string; run(ctx: StandaloneC
           (url) =>
             json
               ? out(JSON.stringify({ url, dataset: demoSummary(demo.app) }, null, 2) + "\n")
-              : out(`sessionlore demo dashboard (made-up Sessions, kept apart from your own): ${url}\n`),
+              : out(`habitlore demo dashboard (made-up Sessions, kept apart from your own): ${url}\n`),
           json ? err : out,
         );
       } finally {
@@ -659,7 +659,7 @@ function indent(text: string, prefix: string): string {
 function suggestionId(args: string[], command: string): number {
   const id = wholeNumber(args[0]);
   if (id === null) {
-    throw new Error(`Which Suggestion? Usage: sessionlore ${command} <id>. Run \`sessionlore review\` to list them.`);
+    throw new Error(`Which Suggestion? Usage: habitlore ${command} <id>. Run \`habitlore review\` to list them.`);
   }
   return id;
 }
@@ -747,7 +747,7 @@ async function confirmSpend(
   if (unpriced.length > 0) say(unpricedHint(unpriced, configFile));
   if (yes) return true;
   if (!ask) {
-    err(`${estimate.what} needs confirmation before it calls the Model Provider. Run \`sessionlore ${estimate.command} --yes\` to go ahead.\n`);
+    err(`${estimate.what} needs confirmation before it calls the Model Provider. Run \`habitlore ${estimate.command} --yes\` to go ahead.\n`);
     return 1;
   }
   const answer = await ask("Continue? [y/N] ");
@@ -757,7 +757,7 @@ async function confirmSpend(
 }
 
 /** What a Scan read, per Harness, with any warnings. */
-const SEE_HELP = "Run `sessionlore --help` for every command and option.\n";
+const SEE_HELP = "Run `habitlore --help` for every command and option.\n";
 
 /**
  * Shows how far an Analysis or Suggestion run has got, on one stderr line that
@@ -894,7 +894,7 @@ function needsText(...needs: [number, string][]): string {
 
 function unpricedHint(models: string[], configFile: string): string {
   const example = JSON.stringify({ prices: { [models[0]!]: { inputPerMillion: 1, outputPerMillion: 5 } } });
-  return `  sessionlore does not know the price of ${models.join(", ")}. To see costs, add US dollars per million tokens to ${configFile}:\n    ${example}\n`;
+  return `  habitlore does not know the price of ${models.join(", ")}. To see costs, add US dollars per million tokens to ${configFile}:\n    ${example}\n`;
 }
 
 function firstLine(text: string): string {
@@ -905,7 +905,7 @@ function firstLine(text: string): string {
 function usage(): string {
   const lines = Object.entries({ ...commands, ...standaloneCommands }).map(([name, c]) => `  ${name.padEnd(10)} ${c.summary}`);
   return (
-    `Usage: sessionlore <command> [--json]\n\nWith no command, sessionlore does \`run\` with its defaults.\n\nCommands:\n${lines.join("\n")}\n\n` +
+    `Usage: habitlore <command> [--json]\n\nWith no command, habitlore does \`run\` with its defaults.\n\nCommands:\n${lines.join("\n")}\n\n` +
     `Options:\n  --json                     Machine-readable output\n` +
     `  --last N                   scan, run: read only the N most recent Sessions\n` +
     `  --since <window>           scan, run: read only Sessions active within 30d, 2w, or since a date (2026-09-01)\n` +
@@ -982,7 +982,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     return 2;
   }
 
-  // Bare `sessionlore` runs the whole flow.
+  // Bare `habitlore` runs the whole flow.
   const name = parsed.positionals[0] ?? "run";
   if (parsed.values.help) {
     io.stdout(usage());
@@ -1049,7 +1049,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
       });
       return 0;
     } catch (error) {
-      io.stderr(`sessionlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      io.stderr(`habitlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);
       return 1;
     }
   }
@@ -1091,7 +1091,7 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
     });
     return exitCode ?? 0;
   } catch (error) {
-    io.stderr(`sessionlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    io.stderr(`habitlore ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   } finally {
     app?.close();

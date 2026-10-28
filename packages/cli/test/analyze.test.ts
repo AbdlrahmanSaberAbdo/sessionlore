@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { runCli, writeConfig } from "./support/harness.js";
 import { scriptedModelProvider } from "./support/model-provider.js";
 
@@ -24,9 +24,9 @@ describe("analyze without a Model Provider", () => {
     const analyze = await runCli(home, ["analyze"]);
     expect(analyze.exitCode).not.toBe(0);
     expect(analyze.stderr).toContain("No Model Provider is configured");
-    expect(analyze.stderr).toContain(home.resolve(".sessionlore/config.json"));
+    expect(analyze.stderr).toContain(home.resolve(".habitlore/config.json"));
     expect(analyze.stderr).toContain("cheapModel");
-    expect(analyze.stderr).toContain("SESSIONLORE_API_KEY");
+    expect(analyze.stderr).toContain("HABITLORE_API_KEY");
   });
 
   it("names the missing API key when the config file chooses a provider that needs one", async () => {
@@ -43,7 +43,7 @@ describe("analyze without a Model Provider", () => {
 
   it("names the problem in an invalid Model Provider configuration", async () => {
     const analyze = await runCli(home, ["analyze"], {
-      env: { SESSIONLORE_PROVIDER: "skynet", SESSIONLORE_CHEAP_MODEL: "x", SESSIONLORE_STRONG_MODEL: "y" },
+      env: { HABITLORE_PROVIDER: "skynet", HABITLORE_CHEAP_MODEL: "x", HABITLORE_STRONG_MODEL: "y" },
     });
 
     expect(analyze.exitCode).not.toBe(0);

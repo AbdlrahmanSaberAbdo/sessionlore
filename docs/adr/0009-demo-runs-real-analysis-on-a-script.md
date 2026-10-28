@@ -1,6 +1,6 @@
 # The demo runs the real pipeline on a scripted Model Provider and Embedder
 
-`sessionlore demo` writes a made-up history with the test fixture builders (Claude Code JSONL and a Cursor `state.vscdb`) into a fresh throwaway home directory, then runs the real scan, Analysis and `suggest` on it into that home's own store, and serves the dashboard on it. Analysis results come from a scripted Model Provider (an AI SDK mock language model) and a scripted Embedder that follow the dataset's script (`demoTopics` in `packages/fixtures/src/demo.ts`): deterministic, offline, no API key, no model download. The throwaway home is removed when the demo stops, and the person's own store, config and Harness data are never opened.
+`habitlore demo` writes a made-up history with the test fixture builders (Claude Code JSONL and a Cursor `state.vscdb`) into a fresh throwaway home directory, then runs the real scan, Analysis and `suggest` on it into that home's own store, and serves the dashboard on it. Analysis results come from a scripted Model Provider (an AI SDK mock language model) and a scripted Embedder that follow the dataset's script (`demoTopics` in `packages/fixtures/src/demo.ts`): deterministic, offline, no API key, no model download. The throwaway home is removed when the demo stops, and the person's own store, config and Harness data are never opened.
 
 ## Considered Options
 
