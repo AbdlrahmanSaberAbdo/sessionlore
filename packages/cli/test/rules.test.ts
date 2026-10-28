@@ -278,6 +278,47 @@ describe("accept a Rule", () => {
       ].join("\n"),
     );
   });
+
+  it("takes over a section written while habitlore was called sessionlore, renaming its markers", async () => {
+    const shop = home.gitRepo("code/shop");
+    pnpmCorrectionsIn(shop);
+    const before = "# Shop\r\n\r\nRun tests with `make test`.  \n\n";
+    const after = "\n## Notes\n\nDeploys are on Fridays.";
+    const file = join(shop, "CLAUDE.md");
+    writeFileSync(
+      file,
+      before +
+        [
+          "<!-- sessionlore:rules:start -->",
+          "## Rules from sessionlore",
+          "",
+          "- Indent with tabs, not spaces.",
+          "<!-- sessionlore:rules:end -->",
+          "",
+        ].join("\n") +
+        after,
+    );
+    const opts = options();
+    await analyze(opts);
+    const [id] = (await suggest(opts)).created;
+
+    const result = await runCli(home, ["accept", String(id)], opts);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(
+      before +
+        [
+          "<!-- habitlore:rules:start -->",
+          "## Rules from habitlore",
+          "",
+          "- Indent with tabs, not spaces.",
+          "- Use pnpm, never npm, to install packages and run scripts.",
+          "<!-- habitlore:rules:end -->",
+          "",
+        ].join("\n") +
+        after,
+    );
+  });
 });
 
 describe("editing, re-scoping and suggesting Rules again", () => {

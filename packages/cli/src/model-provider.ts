@@ -66,12 +66,14 @@ export function resolveModelProvider(
   env: Env,
   configFile: string,
 ): ModelProviderResolution {
+  // habitlore was called sessionlore; its SESSIONLORE_* variables still work.
+  const setting = (name: string) => env[`HABITLORE_${name}`] ?? env[`SESSIONLORE_${name}`];
   const fromEnv = withoutUndefined({
-    provider: env.HABITLORE_PROVIDER,
-    cheapModel: env.HABITLORE_CHEAP_MODEL,
-    strongModel: env.HABITLORE_STRONG_MODEL,
-    apiKey: env.HABITLORE_API_KEY,
-    baseURL: env.HABITLORE_BASE_URL,
+    provider: setting("PROVIDER"),
+    cheapModel: setting("CHEAP_MODEL"),
+    strongModel: setting("STRONG_MODEL"),
+    apiKey: setting("API_KEY"),
+    baseURL: setting("BASE_URL"),
   });
   const merged = { ...fromFile, ...fromEnv };
   if (Object.keys(merged).length === 0) return { ok: false, problem: notConfiguredMessage(configFile) };

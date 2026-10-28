@@ -10,6 +10,7 @@ import {
   type AnalysisResult,
   type ScanResult,
   type SuggestResult,
+  adoptSessionloreDataDir,
   configPath,
   dataDir,
   loadConfig,
@@ -1056,6 +1057,8 @@ export async function main(argv: readonly string[], io: CliEnvironment): Promise
 
   let app: App | undefined;
   try {
+    const adopted = adoptSessionloreDataDir(io.homeDir);
+    if (adopted) io.stderr(`${adopted}\n`);
     const opened = openConfiguredApp(io);
     app = opened.app;
     const { modelProvider } = opened;

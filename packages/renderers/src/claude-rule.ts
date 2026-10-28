@@ -11,6 +11,17 @@ export const RULES_START = "<!-- habitlore:rules:start -->";
 export const RULES_END = "<!-- habitlore:rules:end -->";
 const HEADING = "## Rules from habitlore";
 
+/** The section as sessionlore, habitlore's earlier name, wrote it. Rewritten with the current markers on the next write. */
+const OLD_SECTION = [
+  ["<!-- sessionlore:rules:start -->\n## Rules from sessionlore\n", `${RULES_START}\n${HEADING}\n`],
+  ["<!-- sessionlore:rules:start -->", RULES_START],
+  ["<!-- sessionlore:rules:end -->", RULES_END],
+] as const;
+
+function withCurrentMarkers(content: string | null): string | null {
+  return content === null ? null : OLD_SECTION.reduce((text, [old, current]) => text.replace(old, current), content);
+}
+
 /** The `CLAUDE.md` for a Scope: `<project>/CLAUDE.md` or `~/.claude/CLAUDE.md`. */
 export function claudeMdPath(scope: Scope, homeDir: string): string {
   return scope.kind === "project" ? join(scope.project.path, "CLAUDE.md") : join(homeDir, ".claude", "CLAUDE.md");
@@ -24,9 +35,11 @@ export const claudeRuleRenderer: Renderer = {
     if (suggestion.kind !== "rule") throw new RenderError(`The Claude Rule Renderer can't render a ${suggestion.kind}.`);
     const text = suggestion.rule.replace(/\s*\n\s*/g, " ").trim();
     const { target } = suggestion;
-    if (target?.kind === "rule") return [{ path: target.path, content: withLineReplaced(readFile(target.path), target.line, text, target.path) }];
+    if (target?.kind === "rule") {
+      return [{ path: target.path, content: withLineReplaced(withCurrentMarkers(readFile(target.path)), target.line, text, target.path) }];
+    }
     const path = claudeMdPath(suggestion.scope, homeDir);
-    return [{ path, content: withRule(readFile(path), `- ${text}`, path) }];
+    return [{ path, content: withRule(withCurrentMarkers(readFile(path)), `- ${text}`, path) }];
   },
   installed({ homeDir, projects, readFile }) {
     const files = [join(homeDir, ".claude", "CLAUDE.md"), ...projects.map((p) => join(p.path, "CLAUDE.md"))];
