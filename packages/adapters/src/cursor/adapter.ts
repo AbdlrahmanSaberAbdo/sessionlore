@@ -11,7 +11,7 @@ import {
   type ReadOnlyDatabase,
   type SessionSource,
   type TokenUsage,
-} from "@sessionlore/core";
+} from "@habitlore/core";
 
 /**
  * Reads Cursor Sessions from its global `state.vscdb` (ADR 0002): one Session
@@ -41,12 +41,12 @@ export const cursorAdapter: Adapter = {
     if (layout === "legacy") {
       warn?.(
         `Cursor: ${database} has no composerHeaders table, so its Sessions were read from the older composer list. ` +
-          "Some Sessions may have no Project; if this Cursor is current, please report this so sessionlore can read it.",
+          "Some Sessions may have no Project; if this Cursor is current, please report this so habitlore can read it.",
       );
     } else if (layout === "none") {
       warn?.(
         `Cursor: ${database} has neither a composerHeaders table nor the older composer list, so no Cursor Sessions were read. ` +
-          "Cursor may have changed its storage format; please report this so sessionlore can read it.",
+          "Cursor may have changed its storage format; please report this so habitlore can read it.",
       );
     }
     // A Session changes when its composer or any of its subagent composers does.

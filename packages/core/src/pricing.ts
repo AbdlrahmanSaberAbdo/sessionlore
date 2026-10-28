@@ -1,9 +1,9 @@
-import type { TokenCount } from "@sessionlore/analysis";
+import type { TokenCount } from "@habitlore/analysis";
 import { isPlainObject, type SectionContext } from "./config.js";
 
 /**
  * What a model costs, in US dollars per million tokens. The config file's
- * `prices` section sets prices for models sessionlore does not know, and
+ * `prices` section sets prices for models habitlore does not know, and
  * overrides the built-in ones:
  *
  *   "prices": { "my-model": { "inputPerMillion": 0.5, "outputPerMillion": 1.5 } }

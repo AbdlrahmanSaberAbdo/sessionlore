@@ -72,7 +72,7 @@ export interface CursorDatabaseOptions {
   /**
    * Where the composers' headers are: the `composerHeaders` table (current
    * Cursor), only the older `composer.composerData` list in `ItemTable`, or
-   * neither (a format sessionlore does not know).
+   * neither (a format habitlore does not know).
    */
   headers?: "table" | "legacy" | "none";
 }

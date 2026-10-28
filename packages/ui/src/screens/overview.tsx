@@ -1,4 +1,4 @@
-import type { Overview } from "@sessionlore/core";
+import type { Overview } from "@habitlore/core";
 import { CorrectionsChart } from "../components/corrections-chart.js";
 import { Link } from "../router.js";
 
@@ -15,7 +15,7 @@ export function OverviewScreen({ overview }: { overview: Overview }) {
 
       {counts.sessions === 0 ? (
         <p className="empty">
-          No Sessions yet. Run <code>sessionlore scan</code>, then <code>sessionlore analyze</code>, and reload this page.
+          No Sessions yet. Run <code>habitlore scan</code>, then <code>habitlore analyze</code>, and reload this page.
         </p>
       ) : null}
 
@@ -23,7 +23,7 @@ export function OverviewScreen({ overview }: { overview: Overview }) {
         <h2>Corrections over time</h2>
         {corrections.periods.length === 0 ? (
           <p className="muted">
-            Corrections appear here once Sessions are analyzed with <code>sessionlore analyze</code>.
+            Corrections appear here once Sessions are analyzed with <code>habitlore analyze</code>.
           </p>
         ) : (
           <CorrectionsChart periods={corrections.periods} />

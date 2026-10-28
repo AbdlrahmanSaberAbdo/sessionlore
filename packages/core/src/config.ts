@@ -1,14 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseModelProviderSection, type ModelProviderSettings } from "./model-provider-settings.js";
-import type { RepeatRule } from "@sessionlore/analysis";
+import type { RepeatRule } from "@habitlore/analysis";
 import { parsePricesSection, type Prices } from "./pricing.js";
 import { ProjectFilter, parseProjectsSection } from "./project-filter.js";
 import { parseRepeatRuleSection } from "./repeat-rule-settings.js";
 import { dataDir } from "./store/store.js";
 
 /**
- * sessionlore's config file: `~/.sessionlore/config.json`. Optional; a missing
+ * habitlore's config file: `~/.habitlore/config.json`. Optional; a missing
  * file means defaults everywhere. Each top-level key is a section with its own
  * parser below; add a section by adding a key to `Config` and a parser to
  * `sections`. Unknown keys are rejected so typos never silently do nothing.

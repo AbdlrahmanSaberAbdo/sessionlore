@@ -1,4 +1,4 @@
-import type { BrowseFilter, HarnessId, MindMap, MindMapNode } from "@sessionlore/core";
+import type { BrowseFilter, HarnessId, MindMap, MindMapNode } from "@habitlore/core";
 import {
   Background,
   Controls,

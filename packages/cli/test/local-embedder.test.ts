@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome } from "@sessionlore/fixtures";
+import { FixtureHome } from "@habitlore/fixtures";
 import { localEmbedder, type TransformersModule } from "../src/local-embedder.js";
 
 /**
@@ -32,7 +32,7 @@ function fakeTransformers() {
 }
 
 describe("the local Embedder", () => {
-  it("loads the model on first use only, caching it under ~/.sessionlore/models, and says it is downloading", async () => {
+  it("loads the model on first use only, caching it under ~/.habitlore/models, and says it is downloading", async () => {
     const transformers = fakeTransformers();
     const notices: string[] = [];
     const embedder = localEmbedder({
@@ -49,18 +49,18 @@ describe("the local Embedder", () => {
     expect(await embedder.embed(["f"])).toEqual([[1, 1]]);
 
     expect(transformers.loads).toEqual([
-      { task: "feature-extraction", model: embedder.modelId, cacheDir: home.resolve(".sessionlore/models") },
+      { task: "feature-extraction", model: embedder.modelId, cacheDir: home.resolve(".habitlore/models") },
     ]);
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("Downloading");
-    expect(notices[0]).toContain(home.resolve(".sessionlore/models"));
+    expect(notices[0]).toContain(home.resolve(".habitlore/models"));
   });
 
   it("does not announce a download when the model is already cached", async () => {
     const transformers = fakeTransformers();
     const notices: string[] = [];
     const embedder = localEmbedder({ homeDir: home.path, notify: (t) => notices.push(t), load: async () => transformers.module });
-    mkdirSync(join(home.resolve(".sessionlore/models"), embedder.modelId), { recursive: true });
+    mkdirSync(join(home.resolve(".habitlore/models"), embedder.modelId), { recursive: true });
 
     await embedder.embed(["abc"]);
 

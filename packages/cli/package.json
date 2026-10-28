@@ -1,5 +1,5 @@
 {
-  "name": "sessionlore",
+  "name": "habitlore",
   "version": "0.1.0",
   "description": "Find the work you keep repeating in your AI coding sessions and turn it into agent skills and rules.",
   "license": "MIT",
@@ -23,7 +23,7 @@
   ],
   "type": "module",
   "bin": {
-    "sessionlore": "./dist/bin.js"
+    "habitlore": "./dist/bin.js"
   },
   "files": [
     "dist"
@@ -32,7 +32,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "pnpm --filter @sessionlore/ui build && tsup"
+    "build": "pnpm --filter @habitlore/ui build && tsup"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.87",

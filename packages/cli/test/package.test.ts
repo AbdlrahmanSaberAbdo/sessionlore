@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 
 /**
- * The published `sessionlore` package, as `npm pack` would build it: one
+ * The published `habitlore` package, as `npm pack` would build it: one
  * self-contained package with the CLI, server and dashboard UI, and nothing
  * from the workspace's sources, tests or local machine.
  */
@@ -44,7 +44,7 @@ beforeAll(() => {
 describe("the published package", () => {
   it("contains the CLI, the built dashboard UI, the README and the license", () => {
     expect(files).toEqual(expect.arrayContaining(["package.json", "README.md", "LICENSE", "dist/bin.js", "dist/ui/index.html"]));
-    expect(manifest.bin).toEqual({ sessionlore: "./dist/bin.js" });
+    expect(manifest.bin).toEqual({ habitlore: "./dist/bin.js" });
   });
 
   it("contains only built files: no sources, tests, source maps or session data", () => {
@@ -64,7 +64,7 @@ describe("the published package", () => {
 
   it("bundles the internal packages and declares the runtime ones, transformers.js included", () => {
     const dependencies = Object.keys(manifest.dependencies);
-    expect(dependencies.filter((name) => name.startsWith("@sessionlore/"))).toEqual([]);
+    expect(dependencies.filter((name) => name.startsWith("@habitlore/"))).toEqual([]);
     // transformers.js stays external (native binaries; its model is downloaded on first use), `ai/test` drives the demo.
     expect(dependencies).toEqual(expect.arrayContaining(["@huggingface/transformers", "ai"]));
     for (const version of Object.values(manifest.dependencies)) expect(version).toMatch(/^\d+\.\d+\.\d+$/);

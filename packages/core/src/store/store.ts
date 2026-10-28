@@ -1,19 +1,39 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { HarnessId, HarnessMessage, HarnessSession, TokenUsage } from "../adapter.js";
-import type { Intent, SplitTask } from "@sessionlore/analysis";
+import type { Intent, SplitTask } from "@habitlore/analysis";
 import type { ResolvedProject } from "../project.js";
 import type { Evidence, PluginSkillRef, PriorSuggestion, Scope, Suggestion, SuggestionKind, SuggestionState, Target } from "../suggestion.js";
 import { openDatabase, type Database, type SqlValue } from "./database.js";
 import { migrate } from "./migrations.js";
 
-/** sessionlore's local data folder inside a home directory. */
+/** habitlore's local data folder inside a home directory. */
 export function dataDir(homeDir: string): string {
-  return join(homeDir, ".sessionlore");
+  return join(homeDir, ".habitlore");
 }
 
 export function storePath(homeDir: string): string {
-  return join(dataDir(homeDir), "sessionlore.db");
+  return join(dataDir(homeDir), "habitlore.db");
+}
+
+/**
+ * habitlore was called sessionlore before it was published, and kept its data
+ * in `~/.sessionlore/sessionlore.db`. Moves that folder to `dataDir` unless
+ * one is already there. Returns a line to tell the person, or null when there
+ * was no old folder.
+ */
+export function adoptSessionloreDataDir(homeDir: string): string | null {
+  const oldDir = join(homeDir, ".sessionlore");
+  const newDir = dataDir(homeDir);
+  if (!existsSync(oldDir)) return null;
+  if (existsSync(newDir)) return `Using ${newDir}; left the old ${oldDir} folder alone.`;
+  renameSync(oldDir, newDir);
+  // SQLite keeps its write-ahead log and shared memory next to the database.
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const oldFile = join(newDir, `sessionlore.db${suffix}`);
+    if (existsSync(oldFile)) renameSync(oldFile, `${storePath(homeDir)}${suffix}`);
+  }
+  return `Moved ${oldDir} to ${newDir}: sessionlore is now called habitlore.`;
 }
 
 export interface StoredSession {
@@ -203,7 +223,7 @@ export interface SaveSessionInput {
   scanId: number;
 }
 
-/** The local store. All reads and writes of sessionlore's own data go through here. */
+/** The local store. All reads and writes of habitlore's own data go through here. */
 export class Store {
   private constructor(private readonly db: Database) {}
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { runCli, writeConfig } from "./support/harness.js";
 
 let home: FixtureHome;

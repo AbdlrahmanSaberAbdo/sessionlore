@@ -11,7 +11,7 @@ import { SessionScreen, SessionsScreen } from "../src/screens/sessions.js";
 import { WorkflowScreen, WorkflowsScreen } from "../src/screens/workflows.js";
 
 /**
- * The UI smoke test on the demo dataset (`sessionlore demo`): each of the five
+ * The UI smoke test on the demo dataset (`habitlore demo`): each of the five
  * screens renders the data the demo's App gives the API, with meaningful content.
  */
 
@@ -19,7 +19,7 @@ let root: string;
 let demo: Demo;
 
 beforeAll(async () => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), "sessionlore-demo-ui-")));
+  root = realpathSync(mkdtempSync(join(tmpdir(), "habitlore-demo-ui-")));
   demo = await openDemo({ root, clock: { now: () => new Date("2026-06-01T12:00:00.000Z") } });
   // The demo runs a full scripted Analysis, which can take longer than the default hook timeout on a busy machine.
 }, 30_000);

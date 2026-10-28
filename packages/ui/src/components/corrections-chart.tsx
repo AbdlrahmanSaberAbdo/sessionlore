@@ -1,4 +1,4 @@
-import type { CorrectionsOverTime } from "@sessionlore/core";
+import type { CorrectionsOverTime } from "@habitlore/core";
 
 const WIDTH = 640;
 const HEIGHT = 160;

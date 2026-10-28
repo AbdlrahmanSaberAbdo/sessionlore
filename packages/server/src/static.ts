@@ -44,5 +44,5 @@ async function existingFile(root: string, urlPath: string): Promise<string | nul
 }
 
 function notBuilt(c: Context) {
-  return c.text("The sessionlore dashboard UI is not built. Run `corepack pnpm build` and start `sessionlore serve` again.\n", 503);
+  return c.text("The habitlore dashboard UI is not built. Run `corepack pnpm build` and start `habitlore serve` again.\n", 503);
 }

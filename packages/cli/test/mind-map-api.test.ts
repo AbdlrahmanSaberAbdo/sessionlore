@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bubble, FixtureHome, turn, writeClaudeSession, writeCursorDatabase } from "@sessionlore/fixtures";
+import { bubble, FixtureHome, turn, writeClaudeSession, writeCursorDatabase } from "@habitlore/fixtures";
 import { openApi, type Api } from "./support/api.js";
 import { topicEmbedder } from "./support/embedder.js";
 import { fixedClock, runCli, writeConfig, type RunOptions } from "./support/harness.js";

@@ -5,7 +5,7 @@ import { basename, join, relative } from "node:path";
 /**
  * A throwaway home directory for tests and the demo dataset.
  * Paths are real (symlinks resolved) so recorded working directories match
- * what sessionlore sees when it resolves them.
+ * what habitlore sees when it resolves them.
  */
 export class FixtureHome {
   readonly path: string;
@@ -15,7 +15,7 @@ export class FixtureHome {
   }
 
   /** A new, empty home directory in `parent` (the system's temp folder by default). */
-  static create(prefix = "sessionlore-home-", parent = tmpdir()): FixtureHome {
+  static create(prefix = "habitlore-home-", parent = tmpdir()): FixtureHome {
     return new FixtureHome(realpathSync(mkdtempSync(join(parent, prefix))));
   }
 

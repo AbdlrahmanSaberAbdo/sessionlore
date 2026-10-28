@@ -11,15 +11,15 @@ import {
   type ModelProviderModel,
   type ModelProviderName,
   type ModelProviderSettings,
-} from "@sessionlore/core";
+} from "@habitlore/core";
 import { createOllama } from "ollama-ai-provider-v2";
 
 /**
  * Builds the Model Provider from the config file's `modelProvider` section,
- * with `SESSIONLORE_*` environment variables taking precedence (ADR 0007).
+ * with `HABITLORE_*` environment variables taking precedence (ADR 0007).
  */
 
-/** What sessionlore knows about each provider, and how to build its models. */
+/** What habitlore knows about each provider, and how to build its models. */
 interface ProviderSpec {
   /** The provider's own environment variable for its API key. */
   keyEnv?: string;
@@ -66,12 +66,14 @@ export function resolveModelProvider(
   env: Env,
   configFile: string,
 ): ModelProviderResolution {
+  // habitlore was called sessionlore; its SESSIONLORE_* variables still work.
+  const setting = (name: string) => env[`HABITLORE_${name}`] ?? env[`SESSIONLORE_${name}`];
   const fromEnv = withoutUndefined({
-    provider: env.SESSIONLORE_PROVIDER,
-    cheapModel: env.SESSIONLORE_CHEAP_MODEL,
-    strongModel: env.SESSIONLORE_STRONG_MODEL,
-    apiKey: env.SESSIONLORE_API_KEY,
-    baseURL: env.SESSIONLORE_BASE_URL,
+    provider: setting("PROVIDER"),
+    cheapModel: setting("CHEAP_MODEL"),
+    strongModel: setting("STRONG_MODEL"),
+    apiKey: setting("API_KEY"),
+    baseURL: setting("BASE_URL"),
   });
   const merged = { ...fromFile, ...fromEnv };
   if (Object.keys(merged).length === 0) return { ok: false, problem: notConfiguredMessage(configFile) };
@@ -92,7 +94,7 @@ function build(settings: CompleteModelProviderSettings, env: Env): ModelProvider
   const keyEnv = settings.apiKeyEnv ?? spec.keyEnv;
   const apiKey = settings.apiKey ?? (keyEnv ? env[keyEnv] : undefined);
   if (spec.needsKey && !apiKey) {
-    const where = [keyEnv, "SESSIONLORE_API_KEY"].filter(Boolean).join(" or ");
+    const where = [keyEnv, "HABITLORE_API_KEY"].filter(Boolean).join(" or ");
     return {
       ok: false,
       problem: `No API key found for the ${settings.provider} Model Provider. Set ${where}, or "apiKey" under "modelProvider" in the config file.\n`,
@@ -120,15 +122,15 @@ Add a "modelProvider" section to ${configFile}:
   }
 
 "provider" is one of ${modelProviderNames.join(", ")}. The API key comes from "apiKey", the variable named in "apiKeyEnv",
-SESSIONLORE_API_KEY or the provider's own variable (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY);
-Ollama needs none. SESSIONLORE_PROVIDER, SESSIONLORE_CHEAP_MODEL, SESSIONLORE_STRONG_MODEL and SESSIONLORE_BASE_URL
+HABITLORE_API_KEY or the provider's own variable (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY);
+Ollama needs none. HABITLORE_PROVIDER, HABITLORE_CHEAP_MODEL, HABITLORE_STRONG_MODEL and HABITLORE_BASE_URL
 override the file, so you can also skip it entirely:
 
-  export SESSIONLORE_PROVIDER=openai
-  export SESSIONLORE_CHEAP_MODEL=gpt-5-mini
-  export SESSIONLORE_STRONG_MODEL=gpt-5
-  export SESSIONLORE_API_KEY=sk-...       # or OPENAI_API_KEY
-  # SESSIONLORE_BASE_URL=...              # optional
+  export HABITLORE_PROVIDER=openai
+  export HABITLORE_CHEAP_MODEL=gpt-5-mini
+  export HABITLORE_STRONG_MODEL=gpt-5
+  export HABITLORE_API_KEY=sk-...       # or OPENAI_API_KEY
+  # HABITLORE_BASE_URL=...              # optional
 `;
 }
 

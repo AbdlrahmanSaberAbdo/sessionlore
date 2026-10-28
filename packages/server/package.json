@@ -1,5 +1,5 @@
 {
-  "name": "@sessionlore/server",
+  "name": "@habitlore/server",
   "private": true,
   "type": "module",
   "exports": {
@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@hono/node-server": "2.1.5",
-    "@sessionlore/core": "workspace:*",
+    "@habitlore/core": "workspace:*",
     "hono": "4.13.13"
   }
 }

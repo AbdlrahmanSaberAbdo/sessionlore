@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { topicEmbedder } from "./support/embedder.js";
 import { fixedClock, runCli, type RunOptions } from "./support/harness.js";
 import { scriptedModelProvider } from "./support/model-provider.js";
@@ -532,7 +532,7 @@ describe("the cost of suggest", () => {
     const result = await runCli(home, ["suggest"], opts);
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("sessionlore suggest --yes");
+    expect(result.stderr).toContain("habitlore suggest --yes");
     expect(strongRequests(opts)).toHaveLength(0);
   });
 
@@ -585,7 +585,7 @@ describe("the cost of recluster", () => {
     expect(declined.stdout).toMatch(/mock-cheap +about [\d,]+ input/);
     expect(declined.stdout).toContain("Nothing re-clustered");
     expect(noTerminal.exitCode).toBe(1);
-    expect(noTerminal.stderr).toContain("sessionlore recluster --yes");
+    expect(noTerminal.stderr).toContain("habitlore recluster --yes");
     expect(opts.requests()).toHaveLength(requests);
     expect((await runCli(home, ["workflows", "--json"])).json()).toEqual(before);
   });

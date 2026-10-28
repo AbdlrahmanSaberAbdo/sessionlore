@@ -1,6 +1,6 @@
-# sessionlore
+# habitlore
 
-sessionlore reads your past AI coding sessions (Claude Code and Cursor to start), finds the workflows you keep repeating, and drafts skills and rules from them. You review every draft before anything is written to your agent's config.
+habitlore reads your past AI coding sessions (Claude Code and Cursor to start), finds the workflows you keep repeating, and drafts skills and rules from them. You review every draft before anything is written to your agent's config.
 
 **Status:** v0.1, early. Expect rough edges and breaking changes.
 
@@ -13,19 +13,19 @@ sessionlore reads your past AI coding sessions (Claude Code and Cursor to start)
 
 ## Quickstart
 
-Needs Node.js 22.13 or newer. Every command below also takes `--json` for machine-readable output; `npx sessionlore --help` lists them all.
+Needs Node.js 22.13 or newer. Every command below also takes `--json` for machine-readable output; `npx habitlore --help` lists them all.
 
 ### 1. Try the demo
 
 ```bash
-npx sessionlore demo
+npx habitlore demo
 ```
 
 Opens the dashboard on a made-up history. It needs no Model Provider, downloads nothing, and never reads or writes your own sessions or store. Add `--no-open` to only print the address, `--port N` to pick the port (default 4848), or `--json` to print the address and a summary of the made-up dataset as JSON. Press Ctrl-C to stop it.
 
 ### 2. Set up a Model Provider
 
-Analysis and suggestions use a model you choose, with your own key. Create `~/.sessionlore/config.json`:
+Analysis and suggestions use a model you choose, with your own key. Create `~/.habitlore/config.json`:
 
 ```json
 {
@@ -40,17 +40,17 @@ Analysis and suggestions use a model you choose, with your own key. Create `~/.s
 
 - `provider` is one of `anthropic`, `openai`, `google`, `ollama` or `openai-compatible`.
 - `cheapModel` does the per-session work in `analyze`; `strongModel` writes suggestions.
-- The API key comes from `apiKey`, the variable named in `apiKeyEnv`, `SESSIONLORE_API_KEY`, or the provider's own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`). Ollama needs none.
+- The API key comes from `apiKey`, the variable named in `apiKeyEnv`, `HABITLORE_API_KEY`, or the provider's own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`). Ollama needs none.
 - `baseURL` points at another endpoint; `openai-compatible` requires it (LM Studio, vLLM, OpenRouter and similar). Ollama defaults to `http://localhost:11434/api`.
 
 Environment variables override the file, so you can also skip it entirely:
 
 ```bash
-export SESSIONLORE_PROVIDER=openai
-export SESSIONLORE_CHEAP_MODEL=gpt-5-mini
-export SESSIONLORE_STRONG_MODEL=gpt-5
-export SESSIONLORE_API_KEY=sk-...       # or OPENAI_API_KEY
-# SESSIONLORE_BASE_URL=...              # optional
+export HABITLORE_PROVIDER=openai
+export HABITLORE_CHEAP_MODEL=gpt-5-mini
+export HABITLORE_STRONG_MODEL=gpt-5
+export HABITLORE_API_KEY=sk-...       # or OPENAI_API_KEY
+# HABITLORE_BASE_URL=...              # optional
 ```
 
 The same file also takes `projects` (`include` / `exclude` lists of project folders), `repeatRule` and `prices` sections. Cost estimates know the list prices of Anthropic's and OpenAI's models; for any other model, add `"prices": { "<model>": { "inputPerMillion": 0.5, "outputPerMillion": 1.5 } }` in US dollars, or the estimate shows "cost unknown".
@@ -58,8 +58,8 @@ The same file also takes `projects` (`include` / `exclude` lists of project fold
 ### 3. Run it
 
 ```bash
-npx sessionlore                    # same as: npx sessionlore run --since 30d
-npx sessionlore run --since 2w     # or a date: --since 2026-09-01
+npx habitlore                    # same as: npx habitlore run --since 30d
+npx habitlore run --since 2w     # or a date: --since 2026-09-01
 ```
 
 Scans the sessions you were active in during the last 30 days (Claude Code and Cursor), analyzes them, drafts suggestions, and opens the dashboard on the review queue. Press Ctrl-C to stop it.
@@ -75,38 +75,38 @@ The same flow, one command at a time.
 ### Scan your sessions
 
 ```bash
-npx sessionlore scan            # every finished session on this machine
-npx sessionlore scan --last 50  # only the 50 most recent
-npx sessionlore scan --since 30d  # only sessions active in the last 30 days (or 2w, or since a date: 2026-09-01)
-npx sessionlore scan --harness cursor  # only one tool: claude-code or cursor (repeat, or comma-separate)
-npx sessionlore sessions        # list what was stored
+npx habitlore scan            # every finished session on this machine
+npx habitlore scan --last 50  # only the 50 most recent
+npx habitlore scan --since 30d  # only sessions active in the last 30 days (or 2w, or since a date: 2026-09-01)
+npx habitlore scan --harness cursor  # only one tool: claude-code or cursor (repeat, or comma-separate)
+npx habitlore sessions        # list what was stored
 ```
 
-Scan reads Claude Code's session files and Cursor's local database read-only and copies them into `~/.sessionlore/sessionlore.db`. It works without a Model Provider and sends nothing anywhere. `--since`, `--last` and `--harness` combine.
+Scan reads Claude Code's session files and Cursor's local database read-only and copies them into `~/.habitlore/habitlore.db`. It works without a Model Provider and sends nothing anywhere. `--since`, `--last` and `--harness` combine.
 
 ### Analyze
 
 ```bash
-npx sessionlore analyze
+npx habitlore analyze
 ```
 
 Splits new or changed sessions into tasks, labels each message you typed (New Task, Correction, Clarification, Approval or Follow-up), and groups similar tasks into workflows. It shows a cost estimate and asks before calling the model; `--yes` skips the question. Ctrl-C stops after the current step and keeps finished work.
 
-The first run downloads a small local embedding model (about 25 MB) into `~/.sessionlore/models`; later runs reuse it.
+The first run downloads a small local embedding model (about 25 MB) into `~/.habitlore/models`; later runs reuse it.
 
 ```bash
-npx sessionlore workflows     # repeated workflows, and near ones
-npx sessionlore workflow <id> # one workflow with its tasks
-npx sessionlore corrections   # corrections you keep typing
-npx sessionlore tasks         # every task with its labels
+npx habitlore workflows     # repeated workflows, and near ones
+npx habitlore workflow <id> # one workflow with its tasks
+npx habitlore corrections   # corrections you keep typing
+npx habitlore tasks         # every task with its labels
 ```
 
-Workflows stay put between runs, so their history stays comparable. `npx sessionlore recluster` rebuilds the grouping from scratch on request, keeping each old workflow's id where its tasks went; when that leaves new groups to name, it shows the cheap model's estimated cost and asks first (`--yes` skips the question).
+Workflows stay put between runs, so their history stays comparable. `npx habitlore recluster` rebuilds the grouping from scratch on request, keeping each old workflow's id where its tasks went; when that leaves new groups to name, it shows the cheap model's estimated cost and asks first (`--yes` skips the question).
 
 ### Suggest
 
 ```bash
-npx sessionlore suggest
+npx habitlore suggest
 ```
 
 Uses the strong model to draft a skill for each workflow and a rule for each repeated correction that has none yet. If you already have a matching skill or rule, the draft updates it instead. Like `analyze`, it shows a cost estimate and asks before calling the model; `--yes` skips the question.
@@ -114,30 +114,30 @@ Uses the strong model to draft a skill for each workflow and a rule for each rep
 ### Review
 
 ```bash
-npx sessionlore review         # pending drafts, their evidence, and a diff for updates
-npx sessionlore edit <id>      # change a draft in $VISUAL or $EDITOR first
-npx sessionlore scope <id> user           # install for every project (~/.claude)
-npx sessionlore scope <id> project [dir]  # install for one project
-npx sessionlore accept <id>    # write it
-npx sessionlore reject <id>    # drop it; it won't be proposed again
-npx sessionlore restore <id>   # undo an accept, putting back any file it overwrote
+npx habitlore review         # pending drafts, their evidence, and a diff for updates
+npx habitlore edit <id>      # change a draft in $VISUAL or $EDITOR first
+npx habitlore scope <id> user           # install for every project (~/.claude)
+npx habitlore scope <id> project [dir]  # install for one project
+npx habitlore accept <id>    # write it
+npx habitlore reject <id>    # drop it; it won't be proposed again
+npx habitlore restore <id>   # undo an accept, putting back any file it overwrote
 ```
 
 Skills are written to `.claude/skills/<name>/SKILL.md` and rules to `CLAUDE.md`, in the project or in `~/.claude`, depending on the draft's scope. Nothing is written until you accept. A draft that updates an existing skill or rule updates it where it is; moving such a draft to another scope with `scope` makes it a new skill or rule there instead, and `scope` says so.
 
-`npx sessionlore stats` shows how often accepted skills get used afterwards.
+`npx habitlore stats` shows how often accepted skills get used afterwards.
 
 ### Use the dashboard
 
 ```bash
-npx sessionlore serve
+npx habitlore serve
 ```
 
 Opens the same data in your browser: an overview, a map of projects, workflows, tasks and sessions, and the review queue with accept, edit and reject. It listens on `127.0.0.1` only. `--port N` and `--no-open` work as in the demo.
 
 ## What leaves your machine
 
-sessionlore has no server and no telemetry. It only talks to the network in two cases:
+habitlore has no server and no telemetry. It only talks to the network in two cases:
 
 **Sent to your Model Provider** (only by `run`, `analyze`, `suggest` and `recluster`, and only after you configure one):
 
@@ -145,11 +145,11 @@ sessionlore has no server and no telemetry. It only talks to the network in two 
 - task titles and correction messages, to name groups of similar tasks and corrections;
 - for `suggest`, the messages of the tasks in a workflow or the corrections in a group, plus the text of an existing skill or rule it would update.
 
-Every text is passed through secret redaction first: private keys, passwords in URLs, cloud and API keys, tokens, JWTs and other high-entropy strings become placeholders such as `[REDACTED:api-key]`. Run `npx sessionlore analyze --show-redacted <session>` to see exactly what would be sent for one session. Long messages are cut short.
+Every text is passed through secret redaction first: private keys, passwords in URLs, cloud and API keys, tokens, JWTs and other high-entropy strings become placeholders such as `[REDACTED:api-key]`. Run `npx habitlore analyze --show-redacted <session>` to see exactly what would be sent for one session. Long messages are cut short.
 
 **Downloaded once:** the embedding model, from Hugging Face, on the first `run` or `analyze`. Nothing is uploaded.
 
-**Stays local:** your sessions, the store at `~/.sessionlore/sessionlore.db`, the embeddings (computed on your machine), the dashboard, and the skills and rules you accept. `npx sessionlore stats --export` prints aggregate numbers you can share by hand (`--anonymize` hides workflow names); sessionlore never sends them itself.
+**Stays local:** your sessions, the store at `~/.habitlore/habitlore.db`, the embeddings (computed on your machine), the dashboard, and the skills and rules you accept. `npx habitlore stats --export` prints aggregate numbers you can share by hand (`--anonymize` hides workflow names); habitlore never sends them itself.
 
 ## Principles
 

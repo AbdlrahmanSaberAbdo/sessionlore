@@ -1,4 +1,4 @@
-import type { BrowseFilter, SessionList, SessionTaskView, SessionView, SessionViewMessage } from "@sessionlore/core";
+import type { BrowseFilter, SessionList, SessionTaskView, SessionView, SessionViewMessage } from "@habitlore/core";
 import { Fragment } from "react";
 import { FilterBar, harnessName, plural } from "../components/filters.js";
 import { Link, sessionPath } from "../router.js";
@@ -11,7 +11,7 @@ export function SessionsScreen({ list, filter }: { list: SessionList; filter: Br
       <FilterBar filter={filter} options={list.filters} />
       <section className="panel">
         {list.sessions.length === 0 ? (
-          <p className="muted">No Sessions{Object.keys(filter).length > 0 ? " match these filters" : " yet. Run sessionlore scan"}.</p>
+          <p className="muted">No Sessions{Object.keys(filter).length > 0 ? " match these filters" : " yet. Run habitlore scan"}.</p>
         ) : (
           <table className="list">
             <thead>

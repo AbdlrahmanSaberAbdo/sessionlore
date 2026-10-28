@@ -7,7 +7,7 @@ import {
   type HarnessId,
   type ScopeChoice,
   wholeNumber,
-} from "@sessionlore/core";
+} from "@habitlore/core";
 import { Hono, type Context, type Next } from "hono";
 
 /**

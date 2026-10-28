@@ -5,6 +5,6 @@ export default defineConfig({
   root: import.meta.dirname,
   esbuild: { jsx: "automatic" },
   build: { outDir: "dist", emptyOutDir: true },
-  // `vite dev` proxies the API to a running `sessionlore serve --port 4848 --no-open`.
+  // `vite dev` proxies the API to a running `habitlore serve --port 4848 --no-open`.
   server: { proxy: { "/api": "http://127.0.0.1:4848" } },
 });

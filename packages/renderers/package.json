@@ -1,11 +1,11 @@
 {
-  "name": "@sessionlore/renderers",
+  "name": "@habitlore/renderers",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@sessionlore/core": "workspace:*"
+    "@habitlore/core": "workspace:*"
   }
 }

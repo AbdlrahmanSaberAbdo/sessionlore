@@ -1,4 +1,4 @@
-import type { Embedder } from "@sessionlore/core";
+import type { Embedder } from "@habitlore/core";
 
 /**
  * A deterministic fake Embedder for Seam 1 tests, so clustering is repeatable

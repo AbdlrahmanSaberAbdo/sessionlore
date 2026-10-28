@@ -1,17 +1,17 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { dataDir, type Embedder } from "@sessionlore/core";
+import { dataDir, type Embedder } from "@habitlore/core";
 
 /**
  * The production Embedder (ADR 0004): a small sentence-embedding model run
  * locally with transformers.js. The model is not bundled; it is downloaded on
- * first use into `~/.sessionlore/models` and read from there afterwards.
+ * first use into `~/.habitlore/models` and read from there afterwards.
  */
 
 const MODEL = "Xenova/all-MiniLM-L6-v2";
 const PACKAGE = "@huggingface/transformers";
 
-/** The part of `@huggingface/transformers` sessionlore uses. */
+/** The part of `@huggingface/transformers` habitlore uses. */
 export interface TransformersModule {
   env: { cacheDir?: string | null };
   pipeline(
@@ -37,7 +37,7 @@ export function localEmbedder({ homeDir, notify, load = loadTransformers }: Loca
     const transformers = await load().catch((error: unknown) => {
       throw new Error(
         `Clustering Tasks needs ${PACKAGE}, which could not be loaded (${error instanceof Error ? error.message : String(error)}). ` +
-          `Reinstall sessionlore, or install ${PACKAGE} next to it.`,
+          `Reinstall habitlore, or install ${PACKAGE} next to it.`,
       );
     });
     transformers.env.cacheDir = cacheDir;

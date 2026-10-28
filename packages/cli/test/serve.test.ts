@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { runCli } from "./support/harness.js";
 
 /** These tests run real servers (and the demo a full scripted Analysis), so they get more than the default 5s. */

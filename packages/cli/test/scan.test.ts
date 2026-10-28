@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { claudeProjectsDir, FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { claudeProjectsDir, FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { runCli } from "./support/harness.js";
 
 let home: FixtureHome;
@@ -149,14 +149,14 @@ describe("scan of Claude Code Sessions", () => {
 });
 
 describe("local store", () => {
-  it("lives in a sessionlore folder in the home directory, created on first run", async () => {
-    expect(existsSync(home.resolve(".sessionlore"))).toBe(false);
+  it("lives in a habitlore folder in the home directory, created on first run", async () => {
+    expect(existsSync(home.resolve(".habitlore"))).toBe(false);
 
     const result = await runCli(home, ["sessions", "--json"]);
 
     expect(result.exitCode).toBe(0);
     expect(result.json()).toEqual({ sessions: [] });
-    expect(existsSync(home.resolve(".sessionlore/sessionlore.db"))).toBe(true);
+    expect(existsSync(home.resolve(".habitlore/habitlore.db"))).toBe(true);
   });
 });
 
@@ -167,7 +167,7 @@ describe("Node version check", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toMatch(/requires Node\.js 22\.\d+\.\d+ or newer/);
     expect(result.stderr).toContain("20.11.1");
-    expect(existsSync(home.resolve(".sessionlore"))).toBe(false);
+    expect(existsSync(home.resolve(".habitlore"))).toBe(false);
   });
 });
 

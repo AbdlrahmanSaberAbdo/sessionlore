@@ -1,11 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Clock, Embedder, ModelProvider } from "@sessionlore/core";
-import type { FixtureHome } from "@sessionlore/fixtures";
+import type { Clock, Embedder, ModelProvider } from "@habitlore/core";
+import type { FixtureHome } from "@habitlore/fixtures";
 import { main } from "../../src/index.js";
 
 /**
- * Seam 1: run the sessionlore CLI in-process against a fixture home directory.
+ * Seam 1: run the habitlore CLI in-process against a fixture home directory.
  * Tests observe only what a user would: exit code, stdout, stderr and files.
  */
 
@@ -45,9 +45,9 @@ export interface CliResult {
   json<T = any>(): T;
 }
 
-/** Writes sessionlore's config file in the fixture home. Pass a string to write it verbatim. */
+/** Writes habitlore's config file in the fixture home. Pass a string to write it verbatim. */
 export function writeConfig(home: FixtureHome, config: unknown): string {
-  const file = home.resolve(join(".sessionlore", "config.json"));
+  const file = home.resolve(join(".habitlore", "config.json"));
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, typeof config === "string" ? config : JSON.stringify(config, null, 2));
   return file;

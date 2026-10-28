@@ -1,4 +1,4 @@
-# sessionlore
+# habitlore
 
 Local-first tool that reads AI coding sessions (Claude Code and Cursor to start), finds repeated workflows, and drafts agent skills and rules from them. See `README.md` for the pitch and `docs/v2-plan.md` for deferred work.
 

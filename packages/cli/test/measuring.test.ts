@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { topicEmbedder } from "./support/embedder.js";
 import { fixedClock, runCli, type RunOptions } from "./support/harness.js";
 import { scriptedModelProvider } from "./support/model-provider.js";

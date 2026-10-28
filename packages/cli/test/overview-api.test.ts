@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FixtureHome, turn, writeClaudeSession } from "@sessionlore/fixtures";
+import { FixtureHome, turn, writeClaudeSession } from "@habitlore/fixtures";
 import { openApi, type Api } from "./support/api.js";
 import { topicEmbedder } from "./support/embedder.js";
 import { fixedClock, runCli, writeConfig, type RunOptions } from "./support/harness.js";
@@ -130,7 +130,7 @@ describe("overview API", () => {
 describe("dashboard UI", () => {
   function builtUi() {
     const dir = home.folder("built-ui");
-    writeFileSync(join(dir, "index.html"), "<!doctype html><title>sessionlore</title><div id=root></div>");
+    writeFileSync(join(dir, "index.html"), "<!doctype html><title>habitlore</title><div id=root></div>");
     mkdirSync(join(dir, "assets"));
     writeFileSync(join(dir, "assets", "app-1234.js"), "console.log('ui')");
     return dir;
@@ -144,7 +144,7 @@ describe("dashboard UI", () => {
 
     expect(page.status).toBe(200);
     expect(page.contentType).toContain("text/html");
-    expect(page.text).toContain("<title>sessionlore</title>");
+    expect(page.text).toContain("<title>habitlore</title>");
     expect(script.status).toBe(200);
     expect(script.contentType).toContain("text/javascript");
   });
@@ -155,7 +155,7 @@ describe("dashboard UI", () => {
     const page = await api.get("/workflows");
 
     expect(page.status).toBe(200);
-    expect(page.text).toContain("<title>sessionlore</title>");
+    expect(page.text).toContain("<title>habitlore</title>");
   });
 
   it("serves nothing outside the UI folder", async () => {

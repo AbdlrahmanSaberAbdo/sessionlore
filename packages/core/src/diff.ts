@@ -1,6 +1,6 @@
 /**
  * A unified diff of two texts, line by line, the way `diff -u` prints it.
- * Files sessionlore changes are small, so a plain longest-common-subsequence
+ * Files habitlore changes are small, so a plain longest-common-subsequence
  * table is fast enough.
  */
 

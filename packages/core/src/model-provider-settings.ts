@@ -3,7 +3,7 @@ import type { SectionContext } from "./config.js";
 /**
  * The config file's `modelProvider` section (ADR 0007): which provider, the
  * cheap and strong model ids, and where the API key comes from. Every field
- * is optional in the file because `SESSIONLORE_*` environment variables can
+ * is optional in the file because `HABITLORE_*` environment variables can
  * supply or override them; `completeModelProviderSettings` checks the merged
  * result. Both apply the same rules to each field (`fieldProblem`).
  */
