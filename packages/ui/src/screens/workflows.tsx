@@ -1,18 +1,23 @@
 import type { BrowseFilter, WorkflowDetail, WorkflowList, WorkflowSummary, NearWorkflowSummary } from "@sessionlore/core";
 import { FilterBar, harnessName, plural } from "../components/filters.js";
-import { filterQuery, Link, sessionPath } from "../router.js";
+import { filterQuery, Link, sessionPath, suggestionPath } from "../router.js";
 
 /** Workflows and near-Workflows, with their Tasks, Sessions, Harnesses and Suggestion state. */
 export function WorkflowsScreen({ list, filter }: { list: WorkflowList; filter: BrowseFilter }) {
   const query = filterQuery(filter);
   return (
     <>
-      <h1>Workflows</h1>
-      <FilterBar filter={filter} options={list.filters} />
-      <section className="panel">
-        <h2>Workflows</h2>
+      <header className="page-head">
+        <h1>Workflows</h1>
+        <p className="lede">
+          Similar Tasks you repeat: at least {list.repeatRule.minMembers} across {list.repeatRule.minSessions} Sessions within{" "}
+          {list.repeatRule.windowDays} days. Each one can become a Skill.
+        </p>
+        <FilterBar filter={filter} options={list.filters} />
+      </header>
+      <section className="section">
         {list.workflows.length === 0 ? (
-          <p className="muted">
+          <p className="empty">
             No Workflows{query ? " match these filters" : " yet"}: a Workflow needs at least {list.repeatRule.minMembers} similar
             Tasks across {list.repeatRule.minSessions} Sessions within {list.repeatRule.windowDays} days.
           </p>
@@ -21,9 +26,9 @@ export function WorkflowsScreen({ list, filter }: { list: WorkflowList; filter: 
         )}
       </section>
       {list.nearWorkflows.length > 0 ? (
-        <section className="panel">
+        <section className="section">
           <h2>Near-Workflows</h2>
-          <p className="muted">Close to repeating often enough to become a Workflow.</p>
+          <p className="explain">Close to repeating often enough to become a Workflow.</p>
           <WorkflowTable workflows={list.nearWorkflows} query={query} />
         </section>
       ) : null}
@@ -33,6 +38,7 @@ export function WorkflowsScreen({ list, filter }: { list: WorkflowList; filter: 
 
 function WorkflowTable({ workflows, query }: { workflows: (WorkflowSummary | NearWorkflowSummary)[]; query: string }) {
   return (
+    <div className="table-wrap">
     <table className="list">
       <thead>
         <tr>
@@ -61,6 +67,7 @@ function WorkflowTable({ workflows, query }: { workflows: (WorkflowSummary | Nea
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 
@@ -80,33 +87,39 @@ function needsText(needs: NearWorkflowSummary["needs"]): string {
 export function WorkflowScreen({ workflow, filter }: { workflow: WorkflowDetail; filter: BrowseFilter }) {
   return (
     <>
-      <p className="muted">
-        <Link href={`/workflows${filterQuery(filter)}`}>Workflows</Link> /
-      </p>
-      <h1>{workflow.name}</h1>
-      <p className="muted">
-        {workflow.passesRepeatRule ? "Workflow" : "Near-Workflow"} · {plural(workflow.tasks.length, "Task")} in{" "}
-        {plural(workflow.sessions, "Session")} · {workflow.harnesses.map(harnessName).join(", ")} ·{" "}
-        {perTask(workflow.correctionsPerTask.overall)} Corrections per Task
-      </p>
-      <FilterBar filter={filter} options={workflow.filters} />
+      <header className="page-head">
+        <p className="crumb">
+          <Link href={`/workflows${filterQuery(filter)}`}>Workflows</Link>
+        </p>
+        <h1>{workflow.name}</h1>
+        <p className="lede">
+          {workflow.passesRepeatRule ? "A Workflow" : "A Near-Workflow"}: {plural(workflow.tasks.length, "Task")} in{" "}
+          {plural(workflow.sessions, "Session")} with {workflow.harnesses.map(harnessName).join(" and ")}, and{" "}
+          {perTask(workflow.correctionsPerTask.overall)} Corrections per Task.
+        </p>
+        <FilterBar filter={filter} options={workflow.filters} />
+      </header>
       {workflow.suggestions.length > 0 ? (
-        <section className="panel">
+        <section className="section">
           <h2>Suggestions</h2>
-          <ul className="plain">
+          <ul className="marks">
             {workflow.suggestions.map((s) => (
-              <li key={s.id}>
-                {s.title} <span className={`state ${s.state.toLowerCase()}`}>{s.state}</span>
+              <li key={s.id} className="skill">
+                <Link href={suggestionPath(s.id)} className="title">
+                  {s.title}
+                </Link>
+                <span className={`state ${s.state.toLowerCase()}`}>{s.state}</span>
               </li>
             ))}
           </ul>
         </section>
       ) : null}
-      <section className="panel">
+      <section className="section">
         <h2>Tasks</h2>
         {workflow.tasks.length === 0 ? (
-          <p className="muted">No Tasks match these filters.</p>
+          <p className="empty">No Tasks match these filters.</p>
         ) : (
+          <div className="table-wrap">
           <table className="list">
             <thead>
               <tr>
@@ -131,6 +144,7 @@ export function WorkflowScreen({ workflow, filter }: { workflow: WorkflowDetail;
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </section>
     </>

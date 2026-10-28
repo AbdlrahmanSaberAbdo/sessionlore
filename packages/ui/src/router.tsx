@@ -20,11 +20,12 @@ export function useLocation(): { path: string; search: string } {
 }
 
 /** A link that navigates without reloading the page. */
-export function Link({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
+export function Link({ href, children, className, current }: { href: string; children: ReactNode; className?: string; current?: boolean }) {
   return (
     <a
       href={href}
       className={className}
+      aria-current={current ? "page" : undefined}
       onClick={(event) => {
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
         event.preventDefault();

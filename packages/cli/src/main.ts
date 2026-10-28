@@ -195,7 +195,7 @@ const commands: Record<string, Command> = {
     },
   },
   run: {
-    summary: `Scan (the last ${DEFAULT_RUN_WINDOW} by default), analyze and suggest in one go, then open the dashboard's Review screen; the default command`,
+    summary: `Scan (the last ${DEFAULT_RUN_WINDOW} by default), analyze and suggest in one go, then open the dashboard's Home; the default command`,
     async run(ctx) {
       const { app, json, signal, modelProvider, last, harnesses, since, scanWindow, homeDir, serve, out, err, warn } = ctx;
       const say = json ? err : out;
@@ -289,9 +289,8 @@ const commands: Record<string, Command> = {
         (url) =>
           json
             ? out(JSON.stringify({ url, scan: scanned, analysis, suggestions: suggested, found, usage }, null, 2) + "\n")
-            : out(pending > 0 ? `Review ${pending === 1 ? "it" : "them"} in your browser: ${url}\n` : `Open the dashboard: ${url}\n`),
+            : out(pending > 0 ? `Review ${pending === 1 ? "it" : "them"} on Home: ${url}\n` : `Open Home in your browser: ${url}\n`),
         say,
-        "suggestions",
       );
     },
   },
@@ -525,7 +524,7 @@ const commands: Record<string, Command> = {
         app,
         serve,
         signal,
-        (url) => (json ? out(JSON.stringify({ url }, null, 2) + "\n") : out(`sessionlore dashboard: ${url}\n`)),
+        (url) => (json ? out(JSON.stringify({ url }, null, 2) + "\n") : out(`Open Home in your browser: ${url}\n`)),
         json ? err : out,
       );
     },
@@ -608,11 +607,10 @@ async function serveDashboard(
   signal: AbortSignal | undefined,
   announce: (url: string) => void,
   say: (text: string) => void,
-  /** The dashboard screen to open, relative to its root. */
-  screen = "",
 ): Promise<void> {
   const server = await listen(createServer({ app, uiDir: serve.uiDir }), { port: serve.port });
-  const url = new URL(screen, server.url).href;
+  // Home, the dashboard's root.
+  const url = new URL("/", server.url).href;
   announce(url);
   say("Press Ctrl-C to stop the dashboard.\n");
   if (serve.open) serve.openBrowser?.(url);

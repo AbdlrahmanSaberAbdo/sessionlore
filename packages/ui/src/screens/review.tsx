@@ -1,45 +1,71 @@
-import type { ReviewQueue, Scope, ScopeChoice, SuggestionForm, SuggestionReview } from "@sessionlore/core";
+import type { ReviewQueue, ReviewQueueItem, Scope, ScopeChoice, SuggestionForm, SuggestionReview } from "@sessionlore/core";
 import { useState } from "react";
 import { harnessName, plural } from "../components/filters.js";
 import { Link, sessionPath, suggestionPath } from "../router.js";
 
-/** The review queue: Pending Suggestions with their kind, Scope and Evidence count. */
-export function ReviewQueueScreen({ queue }: { queue: ReviewQueue }) {
+/**
+ * Home for now: the Pending Suggestions, Skills then Rules, each opening its
+ * review page. The full Home (the most repeated Correction, reasons, the
+ * Repeat Rule strip) replaces this.
+ */
+export function PendingScreen({ queue }: { queue: ReviewQueue }) {
+  const skills = queue.suggestions.filter((s) => s.kind === "skill");
+  const rules = queue.suggestions.filter((s) => s.kind === "rule");
+  const count = queue.suggestions.length;
   return (
     <>
-      <h1>Review</h1>
-      <section className="panel">
-        {queue.suggestions.length === 0 ? (
-          <p className="muted">
-            No Pending Suggestions. Run <code>sessionlore suggest</code> to write some.
-          </p>
-        ) : (
-          <table className="list">
-            <thead>
-              <tr>
-                <th>Suggestion</th>
-                <th>Kind</th>
-                <th>Scope</th>
-                <th>Evidence</th>
-              </tr>
-            </thead>
-            <tbody>
-              {queue.suggestions.map((s) => (
-                <tr key={s.id}>
-                  <td>
-                    <Link href={suggestionPath(s.id)}>{s.title}</Link>
-                    {s.target ? <div className="muted small">Updates {s.target.path}</div> : null}
-                  </td>
-                  <td>{kindName(s.kind)}</td>
-                  <td>{scopeName(s.scope)}</td>
-                  <td>{s.kind === "skill" ? plural(s.evidence, "Task") : plural(s.evidence, "Correction")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <header className="page-head">
+        <h1>{count === 0 ? "Nothing to review" : `${count} to review`}</h1>
+        <p className="lede">
+          {count === 0 ? (
+            <>
+              No Pending Suggestions. Run <code>sessionlore suggest</code> to write some from your analyzed Sessions.
+            </>
+          ) : (
+            "Suggestions drafted from what you repeat in your Sessions. Nothing changes until you accept one."
+          )}
+        </p>
+      </header>
+      {skills.length > 0 ? (
+        <section className="section">
+          <h2>
+            <span className="mark" aria-hidden="true" />
+            Skills
+          </h2>
+          <p className="explain">Procedures for things you keep asking your agents to do.</p>
+          <PendingList suggestions={skills} />
+        </section>
+      ) : null}
+      {rules.length > 0 ? (
+        <section className="section">
+          <h2>
+            <span className="mark rule" aria-hidden="true" />
+            Rules
+          </h2>
+          <p className="explain">One-line instructions for things you keep correcting.</p>
+          <PendingList suggestions={rules} />
+        </section>
+      ) : null}
     </>
+  );
+}
+
+function PendingList({ suggestions }: { suggestions: ReviewQueueItem[] }) {
+  return (
+    <ul className="marks">
+      {suggestions.map((s) => (
+        <li key={s.id} className={s.kind}>
+          <Link href={suggestionPath(s.id)} className="title">
+            {s.title}
+          </Link>
+          <span className="reason">
+            {s.kind === "skill" ? `Seen in ${plural(s.evidence, "Task")}` : `From ${plural(s.evidence, "Correction")}`}, for{" "}
+            {scopeName(s.scope)}.
+          </span>
+          {s.target ? <span className="reason small">Updates {s.target.path}</span> : null}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -74,19 +100,22 @@ export function ReviewScreen({
   };
   return (
     <>
-      <p className="muted">
-        <Link href="/suggestions">Review</Link> /
-      </p>
-      <h1>{suggestion.title}</h1>
-      <p className="muted">
-        {kindName(suggestion.kind)} · <span className={`state ${suggestion.state.toLowerCase()}`}>{suggestion.state}</span> ·{" "}
-        {scopeName(suggestion.scope)}
-        {suggestion.target ? ` · updates ${suggestion.target.path}` : ""}
-      </p>
+      <header className="page-head">
+        <p className="crumb">
+          <Link href="/">Home</Link>
+        </p>
+        <p className="chips">
+          <span className={`chip ${suggestion.kind}`}>{kindName(suggestion.kind)}</span>
+          <span className={`chip state ${suggestion.state.toLowerCase()}`}>{suggestion.state}</span>
+          <span className="chip">{scopeName(suggestion.scope)}</span>
+          {suggestion.target ? <span className="chip">updates {suggestion.target.path}</span> : null}
+        </p>
+        <h1>{suggestion.title}</h1>
+      </header>
       {notice ? <p className="notice">{notice}</p> : null}
       {error ? <p className="error">{error}</p> : null}
       {pending ? (
-        <section className="panel actions">
+        <section className="actions" aria-label="Review">
           <button type="button" className="primary" disabled={busy || review.changesError !== null} onClick={() => run(actions.accept)}>
             Accept
           </button>
@@ -96,7 +125,7 @@ export function ReviewScreen({
           <ScopePicker review={review} disabled={busy} onChange={(choice) => run(() => actions.setScope(choice))} />
         </section>
       ) : null}
-      <section className="panel">
+      <section className="section">
         <h2>{suggestion.target ? "Changes" : "What accepting writes"}</h2>
         {review.changesError ? <p className="error">Accepting would fail: {review.changesError}</p> : null}
         {review.changes ? (
@@ -113,21 +142,24 @@ export function ReviewScreen({
         )}
       </section>
       {review.form ? (
-        <section className="panel">
+        <section className="section">
           <h2>Edit</h2>
           <EditForm key={JSON.stringify(review.form)} form={review.form} disabled={busy} onSave={(form) => run(() => actions.save(form))} />
         </section>
       ) : null}
-      <section className="panel">
+      <section className="section">
         <h2>Evidence</h2>
         <ul className="plain evidence">
           {review.evidence.map((e, i) => (
             <li key={i}>
-              <span className="muted small">{(e.correction?.at ?? e.task.at).slice(0, 10)}</span>{" "}
-              <Link href={sessionPath(e.session.id, e.taskPosition)}>{e.correction ? `“${e.correction.text}”` : e.task.title}</Link>
-              <span className="muted small">
-                {e.correction ? ` in ${e.task.title}` : ""} · {harnessName(e.session.harness)}
-                {e.project ? ` · ${e.project.name}` : ""}
+              <time dateTime={e.correction?.at ?? e.task.at}>{(e.correction?.at ?? e.task.at).slice(0, 10)}</time>
+              <Link href={sessionPath(e.session.id, e.taskPosition)} className={e.correction ? "correction" : undefined}>
+                {e.correction ? `“${e.correction.text}”` : e.task.title}
+              </Link>
+              <span className="where">
+                {e.correction ? `In ${e.task.title}, ` : ""}
+                {harnessName(e.session.harness)}
+                {e.project ? `, ${e.project.name}` : ""}
               </span>
             </li>
           ))}

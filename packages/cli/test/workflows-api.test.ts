@@ -258,27 +258,16 @@ describe("session API", () => {
   });
 });
 
-describe("sessions API", () => {
-  it("lists Sessions latest first, narrowed by Project, Harness and date range, never from excluded Projects", async () => {
-    const ids = migrationsAndReleaseNotes();
-    await cli("scan");
-    const shop = home.gitRepo("code/shop");
+describe("removed screens' API", () => {
+  it("answers 404 for the Sessions list and the Mind map, with or without filters", async () => {
+    migrationsAndReleaseNotes();
+    await scanAndAnalyze();
+    api ??= openApi(home, options);
 
-    const all = await get("/api/sessions");
-    const byProject = await get(`/api/sessions?project=${encodeURIComponent(shop)}`);
-    const byHarness = await get("/api/sessions?harness=claude-code");
-    const byDate = await get("/api/sessions?from=2026-05-20&to=2026-05-20");
-    writeConfig(home, { projects: { exclude: ["blog"] } });
-    api?.close();
-    api = undefined;
-    const excluding = await get("/api/sessions");
-
-    const sessionIds = (result: any) => result.sessions.map((s: any) => s.id);
-    expect(sessionIds(all)).toEqual([ids.cursor, ids.blog, ids.shop]);
-    expect(all.filters.harnesses).toEqual(["claude-code", "cursor"]);
-    expect(sessionIds(byProject)).toEqual([ids.cursor, ids.shop]);
-    expect(sessionIds(byHarness)).toEqual([ids.blog, ids.shop]);
-    expect(sessionIds(byDate)).toEqual([ids.blog]);
-    expect(sessionIds(excluding)).toEqual([ids.cursor, ids.shop]);
+    for (const path of ["/api/sessions", "/api/sessions?harness=claude-code", "/api/mind-map", "/api/mind-map?from=2026-05-20"]) {
+      const response = await api.get(path);
+      expect(response.status, path).toBe(404);
+      expect(response.json().error, path).toContain("No API endpoint");
+    }
   });
 });
