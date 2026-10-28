@@ -1,7 +1,7 @@
 import type { AcceptResult, Overview, ReviewQueue, SessionView, SuggestionReview, WorkflowDetail, WorkflowList } from "@sessionlore/core";
 import { useEffect, useState, type ReactNode } from "react";
 import { sendJson, useApi, type Loaded } from "./api.js";
-import { Rail, type RailSection } from "./components/rail.js";
+import { Rail, TopBar, type RailSection } from "./components/rail.js";
 import { filterQuery, Link, parseFilter, useLocation } from "./router.js";
 import { CorrectionsScreen } from "./screens/corrections.js";
 import { PendingScreen, ReviewScreen, type ReviewActions } from "./screens/review.js";
@@ -143,30 +143,30 @@ export function Dashboard() {
     document.title = matched ? `${matched.screen.title} · sessionlore` : "sessionlore";
   }, [matched?.screen]);
   return (
-    <div className="shell">
-      <LoadedRail section={matched?.screen.section ?? null} version={version} />
-      <main className="page">
-        {matched ? (
-          matched.screen.render(matched.params, search, changed)
-        ) : (
-          <p className="muted">
-            Nothing here. Go to <Link href="/">Home</Link>.
-          </p>
-        )}
-      </main>
-    </div>
+    <Chrome section={matched?.screen.section ?? null} version={version}>
+      {matched ? (
+        matched.screen.render(matched.params, search, changed)
+      ) : (
+        <p className="muted">
+          Nothing here. Go to <Link href="/">Home</Link>.
+        </p>
+      )}
+    </Chrome>
   );
 }
 
-/** The rail, with the Pending count and what was read. */
-function LoadedRail({ section, version }: { section: RailSection | null; version: number }) {
+/** The top bar and the rail around a screen, with the Pending count and what was read. */
+function Chrome({ section, version, children }: { section: RailSection | null; version: number; children: ReactNode }) {
   const overview = useApi<Overview>("/api/overview", version);
   const queue = useApi<ReviewQueue>("/api/suggestions", version);
+  const counts = overview.state === "ready" ? overview.data.counts : null;
   return (
-    <Rail
-      section={section}
-      pending={queue.state === "ready" ? queue.data.suggestions.length : null}
-      counts={overview.state === "ready" ? overview.data.counts : null}
-    />
+    <div className="shell">
+      <TopBar counts={counts} />
+      <div className="body">
+        <Rail section={section} pending={queue.state === "ready" ? queue.data.suggestions.length : null} counts={counts} />
+        <main className="page">{children}</main>
+      </div>
+    </div>
   );
 }

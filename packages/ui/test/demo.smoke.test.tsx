@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { openDemo, type Demo } from "../../cli/src/demo.js";
-import { Rail } from "../src/components/rail.js";
+import { Rail, TopBar } from "../src/components/rail.js";
 import { CorrectionsScreen } from "../src/screens/corrections.js";
 import { PendingScreen, ReviewScreen, type ReviewActions } from "../src/screens/review.js";
 import { SessionScreen } from "../src/screens/sessions.js";
@@ -42,8 +42,10 @@ describe("the dashboard on the demo dataset", () => {
       <Rail section="/" pending={api(demo.app.reviewQueue()).suggestions.length} counts={api(demo.app.overview()).counts} />,
     );
 
-    expect(html).toMatch(/Home<span class="count">3</);
-    expect(html).toMatch(/Read from \d+ Sessions and \d+ Tasks/);
+    const top = renderToStaticMarkup(<TopBar counts={api(demo.app.overview()).counts} />);
+
+    expect(html).toMatch(/Home<span class="count pending">3</);
+    expect(top).toMatch(/Read from \d+ Sessions and \d+ Tasks/);
   });
 
   it("Workflows lists Workflows and near-Workflows, and a Workflow shows its Tasks", () => {
@@ -87,7 +89,7 @@ describe("the dashboard on the demo dataset", () => {
     const queueHtml = renderToStaticMarkup(<PendingScreen queue={queue} />);
     const reviewHtml = renderToStaticMarkup(<ReviewScreen review={api(demo.app.reviewSuggestion(targeted.id))!} actions={noActions} />);
 
-    for (const text of ["Write a database migration", "Update the release notes", "Use pnpm", "<h2>Skills</h2>", "<h2>Rules</h2>", "Updates "]) {
+    for (const text of ["Write a database migration", "Update the release notes", "Use pnpm", ">Skills</h2>", ">Rules</h2>", "Updates "]) {
       expect(queueHtml).toContain(text);
     }
     expect(reviewHtml).toContain('<span class="del">-- Always run things with pnpm.');

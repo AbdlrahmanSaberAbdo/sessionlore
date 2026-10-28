@@ -28,14 +28,20 @@ export function PendingScreen({ queue }: { queue: ReviewQueue }) {
       </header>
       {skills.length > 0 ? (
         <section className="section">
-          <h2>Skills</h2>
+          <h2>
+            <span className="mark" aria-hidden="true" />
+            Skills
+          </h2>
           <p className="explain">Procedures for things you keep asking your agents to do.</p>
           <PendingList suggestions={skills} />
         </section>
       ) : null}
       {rules.length > 0 ? (
         <section className="section">
-          <h2>Rules</h2>
+          <h2>
+            <span className="mark rule" aria-hidden="true" />
+            Rules
+          </h2>
           <p className="explain">One-line instructions for things you keep correcting.</p>
           <PendingList suggestions={rules} />
         </section>
@@ -98,9 +104,11 @@ export function ReviewScreen({
         <p className="crumb">
           <Link href="/">Home</Link>
         </p>
-        <p className={`kind-line ${suggestion.kind}`}>
-          {kindName(suggestion.kind)}, {suggestion.state}, for {scopeName(suggestion.scope)}
-          {suggestion.target ? `, updates ${suggestion.target.path}` : ""}
+        <p className="chips">
+          <span className={`chip ${suggestion.kind}`}>{kindName(suggestion.kind)}</span>
+          <span className={`chip state ${suggestion.state.toLowerCase()}`}>{suggestion.state}</span>
+          <span className="chip">{scopeName(suggestion.scope)}</span>
+          {suggestion.target ? <span className="chip">updates {suggestion.target.path}</span> : null}
         </p>
         <h1>{suggestion.title}</h1>
       </header>

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { FilterOptions, ReviewQueue, SessionView, SuggestionReview, WorkflowDetail, WorkflowList } from "@sessionlore/core";
-import { Rail } from "../src/components/rail.js";
+import { Rail, TopBar } from "../src/components/rail.js";
 import { CorrectionsScreen } from "../src/screens/corrections.js";
 import { PendingScreen, ReviewScreen, type ReviewActions } from "../src/screens/review.js";
 import { SessionScreen } from "../src/screens/sessions.js";
@@ -209,27 +209,35 @@ describe("UI screens", () => {
     expect(html).toContain("1 Correction");
   });
 
-  it("The rail shows Home with the Pending count, Workflows, Corrections and what was read, marking the current section", () => {
+  it("The rail shows Home with the Pending count, Workflows with how many, and Corrections, marking the current section", () => {
     const html = renderToStaticMarkup(<Rail section="/workflows" pending={3} counts={{ sessions: 12, tasks: 31, workflows: 2 }} />);
 
-    expect(html).toMatch(/<a href="\/" class="nav">Home<span class="count">3<span class="visually-hidden"> Pending<\/span><\/span><\/a>/);
-    expect(html).toContain('<a href="/workflows" class="nav" aria-current="page">Workflows</a>');
-    expect(html).toContain('<a href="/corrections" class="nav">Corrections</a>');
-    expect(html).toContain("Read from 12 Sessions and 31 Tasks");
+    expect(html).toMatch(/<a href="\/" class="nav"><svg[^]*?<\/svg>Home<span class="count pending">3<span class="visually-hidden"> Pending<\/span><\/span><\/a>/);
+    expect(html).toMatch(/<a href="\/workflows" class="nav" aria-current="page"><svg[^]*?<\/svg>Workflows<span class="count">2<\/span><\/a>/);
+    expect(html).toMatch(/<a href="\/corrections" class="nav"><svg[^]*?<\/svg>Corrections<\/a>/);
   });
 
-  it("The rail leaves out the count when nothing is Pending, and what was read until it is loaded", () => {
+  it("The rail leaves out the Pending count when nothing is Pending, and Workflows' count until it is loaded", () => {
     const html = renderToStaticMarkup(<Rail section="/" pending={0} counts={null} />);
 
-    expect(html).toContain('<a href="/" class="nav" aria-current="page">Home</a>');
-    expect(html).not.toContain("Read from");
+    expect(html).toMatch(/<a href="\/" class="nav" aria-current="page"><svg[^]*?<\/svg>Home<\/a>/);
+    expect(html).not.toContain('class="count');
+  });
+
+  it("The top bar shows the wordmark and how much was read, once it is loaded", () => {
+    const loaded = renderToStaticMarkup(<TopBar counts={{ sessions: 12, tasks: 31, workflows: 2 }} />);
+    const loading = renderToStaticMarkup(<TopBar counts={null} />);
+
+    expect(loaded).toMatch(/<a href="\/" class="wordmark">[^]*sessionlore<\/a>/);
+    expect(loaded).toContain("Read from 12 Sessions and 31 Tasks");
+    expect(loading).not.toContain("Read from");
   });
 
   it("Home lists Pending Suggestions, Skills then Rules, with Evidence count and Scope, linking to each", () => {
     const html = renderToStaticMarkup(<PendingScreen queue={queue} />);
 
     expect(html).toContain("2 to review");
-    expect(html).toMatch(/<h2>Skills<\/h2>[^]*Write a database migration[^]*<h2>Rules<\/h2>[^]*Use pnpm/);
+    expect(html).toMatch(/<h2><span class="mark"[^>]*><\/span>Skills<\/h2>[^]*Write a database migration[^]*<h2><span class="mark rule"[^>]*><\/span>Rules<\/h2>[^]*Use pnpm/);
     for (const text of ["Seen in 3 Tasks, for Project scope (shop).", "From 4 Corrections, for User scope.", "Updates /code/shop/CLAUDE.md"]) {
       expect(html).toContain(text);
     }
