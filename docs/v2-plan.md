@@ -38,7 +38,8 @@ v1 stores suggestions in a format-neutral form and ships only the Claude rendere
 ## Platform and UI
 
 - **Windows support** (different storage paths for Claude Code and Cursor).
-- **Switchable mind map views**: harness → project → task type, and others, alongside v1's project → workflow → tasks → sessions.
+- **A map view of the work** (project → workflow → tasks → sessions, and switchable views such as harness → project → task type). v1's Mind map was removed in the dashboard redesign (ADR 0010).
+- **Progress screen for returning users**: Corrections over time and Corrections per Task before and after a Suggestion was Accepted.
 - **Terminal summary UI** (Ink) for a quick look without opening the browser.
 
 ## Testing suggestions

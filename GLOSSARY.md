@@ -66,6 +66,10 @@ _Avoid_: Threshold, minimum
 A Cluster that passes the Repeat Rule. A Workflow lasts across Analyses: new Tasks join it, and it is only reshaped when the person explicitly asks for a full re-cluster.
 _Avoid_: Pattern, routine, habit
 
+**Near-Workflow**:
+A Cluster that does not pass the Repeat Rule yet but is big enough to show. It earns no Suggestion until it becomes a Workflow.
+_Avoid_: Candidate, almost-Workflow, emerging pattern
+
 ## Suggestions
 
 **Suggestion**:
